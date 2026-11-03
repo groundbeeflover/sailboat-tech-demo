@@ -61,11 +61,10 @@ Renderer::~Renderer()
     glDeleteVertexArrays(1, &m_emptyVao);
 }
 
-void Renderer::render(const FrameContext& frame, const std::vector<DrawItem>& items, const std::vector<LineBatch>& lines,
-    Water& water, const Waves& waves, const Sky& sky, const FeatureToggles& toggles)
+void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water& water, const Waves& waves, const Sky& sky, const FeatureToggles& toggles)
 {
     if (toggles.shadows)
-        drawShadowMap(frame, items, toggles);
+        drawShadowMap(frame, lists.opaque, toggles);
 
     m_hdr.resize(frame.framebufferSize);
     m_hdr.bind();
@@ -77,9 +76,10 @@ void Renderer::render(const FrameContext& frame, const std::vector<DrawItem>& it
     // No back-face culling: the sail is a single double-sided sheet and the hull is open under the deck.
     glDisable(GL_CULL_FACE);
 
-    drawOpaque(frame, items, sky, toggles);
+    drawOpaque(frame, lists.opaque, sky, toggles);
     drawWater(frame, water, waves, sky, toggles);
-    drawLines(frame, lines);
+    drawLines(frame, lists.lines);
+    drawTransparent(frame, lists.transparent);
     // Drawn last so it only covers pixels nothing else wrote; it makes no sense from straight above.
     if (toggles.skybox && !frame.camera.orthographic)
         drawSkybox(frame, sky);
@@ -109,6 +109,7 @@ void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawIt
     m_shadowShader.bind();
     for (const DrawItem& item : items) {
         uniform::set("mvpMatrix", m_lightSpace * item.model);
+        uniform::set("blendWeight", item.blendWeight); // the shadow must follow blend-shape deformation too
         item.mesh->draw();
     }
     glDisable(GL_POLYGON_OFFSET_FILL);
@@ -182,6 +183,8 @@ void Renderer::drawOpaque(const FrameContext& frame, const std::vector<DrawItem>
         uniform::set("emissive", m.emissive);
         uniform::set("doubleSided", m.doubleSided);
         uniform::set("uvScale", m.uvScale);
+        uniform::set("uvOffset", m.uvOffset);
+        uniform::set("blendWeight", item.blendWeight);
 
         const bool albedoMap = toggles.textures && m.albedoMap;
         const bool roughnessMap = toggles.textures && m.roughnessMap;
@@ -262,6 +265,22 @@ void Renderer::drawLines(const FrameContext& frame, const std::vector<LineBatch>
         }
         glDrawArrays(mode, 0, static_cast<GLsizei>(batch.points.size()));
     }
+}
+
+void Renderer::drawTransparent(const FrameContext& frame, const std::vector<ExtraPass>& passes)
+{
+    if (passes.empty())
+        return;
+    // Blended geometry is tested against the opaque depth but must not write depth itself,
+    // otherwise overlapping transparent surfaces would hide each other.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (const ExtraPass& pass : passes)
+        pass(frame);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ZERO);
 }
 
 void Renderer::drawSkybox(const FrameContext& frame, const Sky& sky)

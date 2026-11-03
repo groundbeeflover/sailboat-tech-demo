@@ -58,14 +58,29 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "pbr", &t.pbr }, { "textures", &t.textures }, { "normalMapping", &t.normalMapping },
         { "environmentMap", &t.environmentMap }, { "skybox", &t.skybox }, { "fog", &t.fog },
         { "shadows", &t.shadows }, { "showShadowMap", &t.showShadowMap }, { "dayNightCycle", &t.dayNightCycle },
+
+        // Track A toggles:
+
+        // Track B toggles:
+
     };
     const std::pair<const char*, float*> floats[] = {
         { "windFromDeg", &t.windFromDeg }, { "windStrength", &t.windStrength }, { "boatSpeed", &t.boatSpeed },
         { "courseTension", &t.courseTension }, { "waveScale", &t.waveScale }, { "shadowBias", &t.shadowBias },
         { "shadowExtent", &t.shadowExtent }, { "timeOfDay", &t.timeOfDay }, { "exposure", &t.exposure },
+
+        // Track A parameters:
+
+        // Track B parameters:
+
     };
     const std::pair<const char*, int*> ints[] = {
         { "waveCount", &t.waveCount }, { "pcfRadius", &t.pcfRadius }, { "shadowResolution", &t.shadowResolution },
+
+        // Track A parameters:
+
+        // Track B parameters:
+
     };
     for (const auto& [key, field] : bools) {
         if (name == key) {
@@ -149,7 +164,7 @@ public:
                 .aspect = static_cast<float>(framebufferSize.x) / static_cast<float>(std::max(framebufferSize.y, 1)),
                 .dt = dt,
             };
-            const FrameContext frame {
+            FrameContext frame {
                 .camera = m_cameras.update(m_toggles.camera, cameraInputs),
                 .lighting = m_lighting,
                 .time = m_time,
@@ -157,16 +172,20 @@ public:
                 // Halfway up the mast, so the light box holds the whole rig.
                 .shadowCenter = m_boat.coursePosition() + glm::vec3(0.0f, 4.0f, 0.0f),
             };
+            // ---- Track A: provide the spotlight here once a light source exists, e.g.
+            //      frame.spot = m_island.lampLight();
 
-            std::vector<DrawItem> items;
-            m_boat.root().collect(items);
-            m_course.root().collect(items);
-            std::vector<LineBatch> lines;
-            m_course.appendLines(lines, m_toggles, m_waves, m_time);
+            RenderLists lists;
+            m_boat.root().collect(lists.opaque);
+            m_course.root().collect(lists.opaque);
+            m_course.appendLines(lists.lines, m_toggles, m_waves, m_time);
             if (m_toggles.camera == CameraMode::Top) // the boat is only a few pixels on the map, so mark it
-                lines.push_back({ .points = { m_boat.coursePosition() + glm::vec3(0.0f, 2.0f, 0.0f) }, .mode = LineMode::Points, .color = glm::vec3(3.0f, 0.2f, 0.1f), .pointSize = 14.0f });
+                lists.lines.push_back({ .points = { m_boat.coursePosition() + glm::vec3(0.0f, 2.0f, 0.0f) }, .mode = LineMode::Points, .color = glm::vec3(3.0f, 0.2f, 0.1f), .pointSize = 14.0f });
+            // ---- Track A: add your scene content here, e.g.
+            //      m_island.root().collect(lists.opaque);
+            //      lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
 
-            m_renderer.render(frame, items, lines, m_water, m_waves, m_sky, m_toggles);
+            m_renderer.render(frame, lists, m_water, m_waves, m_sky, m_toggles);
 
             // Screenshots are read before ImGui draws on top, so they show the scene only.
             if (m_screenshotRequested) {
@@ -193,27 +212,60 @@ private:
         m_course.setTension(m_toggles.courseTension);
         m_course.update(m_time, m_waves);
         m_boat.update(dt, m_time, m_toggles, m_course.path(), m_waves);
+
+        // ---- Track A systems update here (island, particles, flag, ...) ----
+
+        // ---- Track B per-frame updates here (if any) ----
     }
 
+    // The panel is one ImGui window with a collapsible section per feature. Each section is its own
+    // method, so a new feature adds a method and a single call in the slot of its track (fewer merge conflicts).
     void drawUi()
     {
-        FeatureToggles& t = m_toggles;
         ImGui::Begin("Sailboat tech demo");
         // printf-style varargs promote float to double anyway; the casts just make that explicit.
         ImGui::Text("%.0f fps (%.2f ms)", static_cast<double>(1.0f / std::max(m_frameTime, 1e-5f)), static_cast<double>(1000.0f * m_frameTime));
 
+        viewpointUi();
+        windUi();
+        boatAndCourseUi();
+        waterUi();
+        shadingUi();
+        shadowUi();
+        skyUi();
+
+        // ---- Track A feature panels (one call per feature) ----
+
+        // ---- Track B feature panels (one call per feature) ----
+
+        if (ImGui::Button("Save screenshot (P)"))
+            m_screenshotRequested = true;
+        ImGui::End();
+    }
+
+    void viewpointUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Viewpoint", ImGuiTreeNodeFlags_DefaultOpen)) {
             const char* names[] = { "Chase (1)", "Deck, attached to the hull (2)", "Top, orthographic (3)", "Orbit, drag + scroll (4)" };
             int camera = static_cast<int>(t.camera);
             if (ImGui::Combo("Camera", &camera, names, IM_ARRAYSIZE(names)))
                 t.camera = static_cast<CameraMode>(camera);
         }
+    }
 
+    void windUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Wind", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::SliderFloat("From (deg)", &t.windFromDeg, 0.0f, 360.0f, "%.0f");
             ImGui::SliderFloat("Strength", &t.windStrength, 0.0f, 1.0f);
         }
+    }
 
+    void boatAndCourseUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Boat and course", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Checkbox("Pause boat (space)", &t.pauseBoat);
             ImGui::SliderFloat("Speed (m/s)", &t.boatSpeed, 0.0f, 15.0f);
@@ -227,7 +279,11 @@ private:
             ImGui::Text("speed %.2f m/s   u = %.3f   s = %.0f m", static_cast<double>(b.speed), static_cast<double>(b.courseParameter), static_cast<double>(b.distance));
             ImGui::Text("wind angle %.0f   boom %.0f   heel %.1f   rudder %.1f", static_cast<double>(b.windAngleDeg), static_cast<double>(b.boomDeg), static_cast<double>(b.heelDeg), static_cast<double>(b.rudderDeg));
         }
+    }
 
+    void waterUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Water")) {
             ImGui::Checkbox("Gerstner waves", &t.waves);
             ImGui::SliderInt("Wave count", &t.waveCount, 1, Waves::MaxWaves);
@@ -235,7 +291,11 @@ private:
             ImGui::Checkbox("Detail normal map", &t.waterDetailNormals);
             ImGui::Checkbox("Wireframe", &t.waterWireframe);
         }
+    }
 
+    void shadingUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Shading")) {
             ImGui::Checkbox("PBR (off = Blinn-Phong)", &t.pbr);
             ImGui::Checkbox("Material textures", &t.textures);
@@ -244,7 +304,11 @@ private:
             ImGui::Checkbox("Skybox", &t.skybox);
             ImGui::Checkbox("Fog", &t.fog);
         }
+    }
 
+    void shadowUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Shadows")) {
             ImGui::Checkbox("Sun shadows (shadow map)", &t.shadows);
             const char* resolutions[] = { "1024", "2048", "4096" };
@@ -256,18 +320,22 @@ private:
             ImGui::SliderFloat("Area half-size (m)", &t.shadowExtent, 6.0f, 40.0f, "%.0f");
             ImGui::Checkbox("Show shadow map", &t.showShadowMap);
         }
+    }
 
+    void skyUi()
+    {
+        FeatureToggles& t = m_toggles;
         if (ImGui::CollapsingHeader("Sky and light")) {
             ImGui::SliderFloat("Time of day", &t.timeOfDay, 0.0f, 24.0f, "%.1f h");
             ImGui::Checkbox("Day-night cycle", &t.dayNightCycle);
             ImGui::SliderFloat("Day length (s)", &t.dayLengthSeconds, 20.0f, 600.0f, "%.0f");
             ImGui::SliderFloat("Exposure", &t.exposure, 0.1f, 4.0f);
         }
-
-        if (ImGui::Button("Save screenshot (P)"))
-            m_screenshotRequested = true;
-        ImGui::End();
     }
+
+    // ---- Track A feature panel methods ----
+
+    // ---- Track B feature panel methods ----
 
     void onKeyPressed(int key)
     {
@@ -333,6 +401,10 @@ private:
     Boat m_boat;
     Cameras m_cameras;
     Lighting m_lighting;
+
+    // ---- Track A members (Island, ParticleSystem, ...) ----
+
+    // ---- Track B members (if any) ----
 
     float m_time { 0.0f };
     float m_frameTime { 1.0f / 60.0f };

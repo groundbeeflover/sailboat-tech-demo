@@ -14,7 +14,7 @@ All 7 minimal requirements are done. Everything below is extras, polish and hand
 | | Track A: world and simulation | Track B: render pipeline |
 |---|---|---|
 | Mindset | New things in the scene, CPU logic, their own meshes/shaders | New passes, post-processing, lighting models |
-| Features | A1 Island + lighthouse, A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B0 Interface PR, B1 Bloom, B2 Spotlight + second shadow map, B3 Minimap, B4 Crest foam |
+| Features | A1 Island + lighthouse, A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom, B2 Spotlight + second shadow map, B3 Minimap, B4 Crest foam (B0 interface: **done**) |
 | Owns files | `island.*`, `particles.*`, `flag.*`, `boat.*`, `course.*`, `procedural_*`, `waves.*`, `particle_*.glsl`, `terrain_*.glsl` | `renderer.*`, `bloom.*`, `minimap.*`, `lights.h`, `shadow_map.*`, `framebuffer.*`, `sky.*`, `pbr_*.glsl`, `water_*.glsl`, `post_frag.glsl`, `bloom_*.glsl` |
 | Rough hours | ≈ 12–14 | ≈ 11–13 |
 
@@ -26,18 +26,18 @@ both be asked about anything in the demo.
 
 | File | Who touches it | Rule |
 |---|---|---|
-| `src/feature_toggles.h` | everyone | Add your fields in a block with a `// --- <feature>` comment, at the end of the struct |
-| `src/application.cpp` | everyone | Your UI goes in **one** `if (ImGui::CollapsingHeader("<feature>")) { ... }` block; also add your toggles to `applySetting()`; system updates go in `update()` |
-| `src/renderer.cpp` | B (A only via the hook from B0) | A never edits the pass order; A's draw code lives in A's files and is called through the hook |
-| `shaders/pbr_*.glsl`, `water_*.glsl` | B (A3/A4 need a few lines: coordinate) | Keep `lightVisibility`/`applyFog` copies identical in both shaders |
-| `src/draw_item.h` | both, rarely | Additive changes only (new fields with defaults) |
-| `CMakeLists.txt` | both | One line per new `.cpp`; re-run CMake after adding a shader |
+| `src/feature_toggles.h` | everyone | Add your fields under your track's `// ---- Track A/B features` comment at the end of the struct |
+| `src/application.cpp` | everyone | Use the marked `// ---- Track A …` / `// ---- Track B …` slots: UI method + one call in `drawUi()`, `applySetting()` entries, members, `update()`, render-list building |
+| `src/renderer.cpp` | B only | A never edits it: A's drawing goes through `lists.transparent` / `lists.opaque` (see ARCHITECTURE.md §7.12) |
+| `shaders/pbr_*.glsl`, `water_*.glsl` | B only | Blend shapes and UV offsets are already wired in. Keep `lightVisibility`/`applyFog` copies identical in both shaders |
+| `src/draw_item.h`, `src/lights.h` | both, rarely | Additive changes only (new fields with defaults) |
+| `CMakeLists.txt` | both | One line per new `.cpp` in your track's section; re-run CMake after adding a shader |
 
 ### Dependency graph
 
 ```mermaid
 flowchart LR
-    B0["B0 Interface PR<br/>(lights.h, extra-pass hook,<br/>DrawItem fields)"]
+    B0["B0 Interface (done)<br/>(lights.h, RenderLists hook,<br/>blendWeight, uvOffset, UI slots)"]
     B1["B1 Bloom"]
     B2["B2 Spotlight + 2nd shadow map"]
     B3["B3 Minimap"]
@@ -59,13 +59,13 @@ flowchart LR
     B1 & B2 & B3 & B4 & A1 & A2 & A3 & A4 --> R
 ```
 
-Nothing blocks for long: B0 is ~45 minutes, and B2 uses a placeholder spotlight until A1 lands.
+B0 is done, so both tracks can start right away; B2 uses a placeholder spotlight until A1 lands.
 
 ### Suggested timeline (T = when you both start)
 
 | Time | Track A | Track B |
 |---|---|---|
-| T+0 – T+1 | Read ARCHITECTURE.md, run the demo, take baseline screenshots | **B0 interface PR** → merge quickly |
+| T+0 – T+1 | Read ARCHITECTURE.md (§7.12 extension points), run the demo, take baseline screenshots | same, then start B1 |
 | T+1 – T+5 | A1 Island + lighthouse | B1 Bloom |
 | T+5 – T+8 | A2 Spray particles | B2 Spotlight + shadows (placeholder lamp, then A1's lamp) |
 | T+8 – T+10 | A3 Sail blend shapes | B4 Crest foam |
@@ -107,32 +107,26 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug && ninja -C build
 
 ## 2. Track B: render pipeline
 
-### B0. Interface PR (do this first, ~45 min)
+### B0. Interface (done)
 
-Small, boring and shared, so that afterwards nobody has to edit someone else's files.
+Merged before the split so that nobody has to edit someone else's files. What it added:
 
-1. **`src/lights.h`** (new):
-   ```cpp
-   struct SpotLight {
-       bool enabled { false };
-       glm::vec3 position { 0.0f };
-       glm::vec3 direction { 0.0f, -1.0f, 0.0f }; // unit, where the cone points
-       glm::vec3 color { 0.0f };                  // HDR radiance, can be >> 1
-       float innerAngle { glm::radians(8.0f) };   // full intensity inside
-       float outerAngle { glm::radians(12.0f) };  // zero outside
-       float range { 300.0f };                    // metres, shadow far plane
-   };
-   ```
-   Add `SpotLight spot;` to `FrameContext` (renderer.h). Track A fills it later; until then it stays disabled.
-2. **Extra-pass hook** in `Renderer::render`: add a parameter
-   `const std::vector<std::function<void(const FrameContext&)>>& transparentPasses` and call each one
-   after `drawLines` and before `drawSkybox`, with the HDR target bound, depth test on, depth write
-   off and blending enabled (`glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`); restore the state after.
-   Pass an empty vector from `application.cpp` for now. A2 (particles) registers here.
-3. **`DrawItem`/`SceneNode` fields** for A3/A4: `float blendWeight { 0.0f };` on `SceneNode`, copied
-   into `DrawItem` by `collect()`; set `uniform::set("blendWeight", item.blendWeight)` in `drawOpaque`.
-4. Optional, but it removes most UI conflicts: move each `CollapsingHeader` block of `drawUi()` into a
-   private method (`viewpointUi()`, `windUi()`, …) so new features add a method plus one call.
+1. **`src/lights.h`**: `SpotLight { enabled, position, direction, color, innerAngle, outerAngle, range }`,
+   and `FrameContext::spot` (disabled by default). Track A fills it, Track B shades with it.
+2. **`RenderLists`** (`draw_item.h`): `Renderer::render(frame, lists, …)` takes `lists.opaque`,
+   `lists.lines` and `lists.transparent`. Each `ExtraPass` in `transparent` is called after the lines
+   and before the skybox, with the HDR target bound, depth test on, depth writes off and
+   `glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)`; the renderer restores state afterwards
+   (full contract in `renderer.h`).
+3. **Blend shapes, shader side**: `SceneNode::blendWeight` → `DrawItem::blendWeight` → uniform.
+   `pbr_vert.glsl` and `shadow_vert.glsl` add `blendWeight · delta` from vertex attributes 4
+   (position) and 5 (normal). Meshes without those attributes are unaffected (tested).
+4. **Animated textures**: `PBRMaterial::uvOffset`; the shader samples at `uv · uvScale + uvOffset`.
+5. **UI and slots**: `drawUi()` is split into one method per section, and every shared file has
+   `// ---- Track A …` / `// ---- Track B …` comment slots (toggles, `applySetting()`, members,
+   `update()`, render lists, `CMakeLists.txt`).
+
+The rendered output is byte-identical to before B0 (checked with captures).
 
 ### B1. Bloom (~2.5 h)
 
@@ -190,9 +184,9 @@ the first buoy, or a deck light at the masthead pointing down.
 4. Optional: the visible **beam** itself: a cone mesh with additive blending, brightness fading along
    its length, rendered through the B0 transparent-pass hook. Very effective with bloom.
 
-**Touch points:** `FrameContext::spot` (from B0) — filled in `application.cpp` from
-`island.lampLight()` once A1 exists; `renderer.*`; both scene shaders; toggles (`spotlight`,
-`spotShadows`, `spotBias`).
+**Touch points:** read `frame.spot` (exists, from B0). For the placeholder, fill `frame.spot` yourself
+in the Track A slot of `Application::run`; A1 replaces that line with `frame.spot = m_island.lampLight();`.
+Then `renderer.*`, both scene shaders, toggles (`spotlight`, `spotShadows`, `spotBias`).
 
 **Report:** explain orthographic (sun) vs perspective (spot) shadow maps, why the bias behaves
 differently, and the cost: one more depth pass of the boat only.
@@ -296,8 +290,9 @@ check), toggles (`island`, `lighthouseSpeed`).
    the camera right/up vectors (`inverse(view)` columns 0 and 1).
 4. Blending: spray is white and soft; use premultiplied alpha. Sort back-to-front by view depth
    (`std::sort` on 4000 is fine) or use additive blending and skip sorting — justify the choice.
-5. Register the draw through the B0 hook:
-   `transparentPasses.push_back([&](const FrameContext& f) { m_particles.draw(f); });`
+5. Register the draw through the B0 hook, in the Track A slot of `Application::run`:
+   `lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });`
+   `f.camera`, `f.lighting` and `f.time` give you everything for billboarding and lighting.
 6. Soft particle texture: radial gradient generated in code, or a small noisy puff.
 
 **Touch points:** `boat.cpp` (one `Bow` node), `application.cpp` (member, update, hook),
@@ -314,21 +309,17 @@ interpolated in the vertex shader. Shows the extra "blend shapes in shaders".
 1. In `procedural_mesh.cpp`, create two meshes with identical topology: `makeSail(…, camber = 0)`
    (flat) and `makeSail(…, camber = 0.1)` (full).
 2. Store the deltas (`full − flat` positions and normals) as extra vertex attributes 4 and 5 — add an
-   optional `GPUMesh(const Mesh& base, const Mesh& target)` constructor in `mesh.cpp`. Meshes without
-   these arrays read the default (0, 0, 0), so other meshes are unaffected.
-3. `pbr_vert.glsl`:
-   ```glsl
-   layout(location = 4) in vec3 deltaPosition;
-   layout(location = 5) in vec3 deltaNormal;
-   uniform float blendWeight;  // -1 .. 1: billow to the other side with negative weights
-   vec3 p = position + blendWeight * deltaPosition;
-   vec3 n = normalize(normal + blendWeight * deltaNormal);
-   ```
-4. In `Boat::update`, set the sail node's `blendWeight = m_billow` (from B0) and keep `anim = I`.
+   optional `GPUMesh(const Mesh& base, const Mesh& target)` constructor in `mesh.cpp` (one more VBO,
+   `glEnableVertexAttribArray(4/5)`, `glVertexAttribPointer(4/5, 3, GL_FLOAT, …)`).
+3. The shader side is already in place (B0): `pbr_vert.glsl` and `shadow_vert.glsl` compute
+   `position + blendWeight * deltaPosition` and `normal + blendWeight * deltaNormal`. Read and explain
+   those lines in the report; you own the feature.
+4. In `Boat::update`, set `m_sail->blendWeight = m_billow` and `m_sail->anim = I` (drop the scale).
    Negative weights billow to the other side, so the leeward logic stays the same.
-5. Bonus: a third shape (luffing/flapping) driven by a sine when pointing into the wind.
+5. Bonus: a third shape (luffing/flapping) driven by a sine when pointing into the wind (would need
+   attributes 6/7 and a second weight; mention it as future work if time is short).
 
-**Touch points:** `mesh.*`, `pbr_vert.glsl` (5 lines; tell B), `boat.cpp`.
+**Touch points:** `mesh.*`, `boat.cpp`, `procedural_mesh.cpp`. No shader or renderer changes needed.
 
 **Report:** compare to the old non-uniform scale (normal matrix) approach; show weight 0, 0.5, 1.
 
@@ -340,14 +331,15 @@ independent of the frame rate.
 1. Make a flipbook atlas: N frames (e.g. 4 × 4) of a flag with a waving shading pattern. Generate it in
    `procedural_texture.cpp` (each frame = a colour pattern shaded by `0.8 + 0.2 sin(k x − phase_i)`), or
    draw the frames yourself (own asset, mention it).
-2. Material support: add `glm::ivec2 flipbookGrid { 1, 1 }; float flipbookFps { 0.0f };` to `PBRMaterial`.
-   In `drawOpaque`, compute `frame = int(time * fps) % (cols * rows)` **on the CPU from the simulation
-   time** and pass `uvOffset`/`uvScale` to the shader (pbr_frag already multiplies by `uvScale`; add an offset).
+2. Animate it from your own update code (e.g. a `Flag` class or in `Boat::update`), using the
+   **simulation time**: `frame = int(time * fps) % (cols * rows)`, then set the flag material's
+   `uvScale = 1 / grid` and `uvOffset = vec2(frame % cols, frame / cols) / grid`. The shader already
+   samples at `uv * uvScale + uvOffset` (B0), so no renderer change is needed.
 3. Optionally add a vertex-shader wave on the flag mesh too, but the grading point is the texture
    switching, so keep it clear (UI: "freeze flipbook", fps slider).
 4. Flag node: child of the hull at the stern (or of the backstay), a thin grid mesh, double-sided.
 
-**Touch points:** `draw_item.h`, `renderer.cpp` (`drawOpaque`, 3 lines), `pbr_frag.glsl` (1 line), `boat.cpp`.
+**Touch points:** your flag code, `boat.cpp` (node), `procedural_texture.cpp` (atlas). No renderer/shader changes.
 
 **Report:** why time-based (`frame = floor(t · fps)`) and not per rendered frame; show 2 frames.
 

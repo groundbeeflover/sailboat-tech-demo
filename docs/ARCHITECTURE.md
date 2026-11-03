@@ -73,7 +73,8 @@ Reproducible screenshots without a window (fixed 1/60 s time step):
 ## 3. Module map
 
 The simulation side never calls OpenGL in its update code; the renderer never knows it is drawing a boat.
-They meet in plain data: `DrawItem`, `LineBatch`, `CameraView`, `Lighting`, `FrameContext`.
+They meet in plain data: `RenderLists` (`DrawItem`s, `LineBatch`es, extra passes), `CameraView`,
+`Lighting`, `SpotLight` and `FrameContext`. Section 7.12 lists the extension points for new features.
 
 ```mermaid
 flowchart LR
@@ -149,7 +150,8 @@ flowchart LR
 | `procedural_texture.*` | Plank/strake/ripple textures (pure CPU) |
 | `mesh.*`, `texture.*` | Starter code, extended: tangent VBO, raw-pixel textures, sRGB, fixed move assignment |
 | `uniforms.h` | Silent uniform setters for the bound program |
-| `draw_item.h` | `PBRMaterial`, `DrawItem`, `LineBatch`, `LineMode` |
+| `draw_item.h` | `PBRMaterial`, `DrawItem`, `LineBatch`, `ExtraPass`, `RenderLists`: what the scene hands to the renderer |
+| `lights.h` | `SpotLight`: second light, filled by the scene, read by the renderer |
 
 ---
 
@@ -270,6 +272,7 @@ classDiagram
         +mat4 rest
         +mat4 anim
         +mat4 world
+        +float blendWeight
         +bool visible
         +vector~unique_ptr~SceneNode~~ children
         +addChild(name, mesh, material, rest) SceneNode&
@@ -343,12 +346,13 @@ classDiagram
         -HdrTarget m_hdr
         -ShadowMap m_shadowMap
         -mat4 m_lightSpace
-        +render(frame, items, lines, water, waves, sky, toggles) void
+        +render(frame, lists, water, waves, sky, toggles) void
         -drawShadowMap(frame, items, toggles) void
         -setFrameUniforms(frame, sky, toggles) void
         -drawOpaque(frame, items, sky, toggles) void
         -drawWater(frame, water, waves, sky, toggles) void
         -drawLines(frame, lines) void
+        -drawTransparent(frame, passes) void
         -drawSkybox(frame, sky) void
         -tonemap(frame, toggles) void
         -drawShadowMapDebugView(frame) void
@@ -360,6 +364,22 @@ classDiagram
         +float time
         +ivec2 framebufferSize
         +vec3 shadowCenter
+        +SpotLight spot
+    }
+
+    class SpotLight {
+        +bool enabled
+        +vec3 position
+        +vec3 direction
+        +vec3 color
+        +float innerAngle, outerAngle
+        +float range
+    }
+
+    class RenderLists {
+        +vector~DrawItem~ opaque
+        +vector~LineBatch~ lines
+        +vector~ExtraPass~ transparent
     }
 
     class Lighting {
@@ -407,6 +427,7 @@ classDiagram
         +GPUMesh* mesh
         +PBRMaterial* material
         +mat4 model
+        +float blendWeight
     }
 
     class PBRMaterial {
@@ -418,6 +439,7 @@ classDiagram
         +Texture* normalMap
         +Texture* roughnessMap
         +vec2 uvScale
+        +vec2 uvOffset
         +bool doubleSided
     }
 
@@ -442,8 +464,10 @@ classDiagram
     Renderer *-- HdrTarget
     Renderer *-- ShadowMap
     Renderer ..> FrameContext
-    Renderer ..> DrawItem
-    Renderer ..> LineBatch
+    Renderer ..> RenderLists
+    RenderLists *-- DrawItem
+    RenderLists *-- LineBatch
+    FrameContext *-- SpotLight
     Renderer ..> Sky : cubemap
     Renderer ..> Water : grid + ripples
     FrameContext *-- Lighting
@@ -562,9 +586,10 @@ sequenceDiagram
     end
     App->>Cams: update(mode, CameraInputs from boat + course)
     Cams-->>App: CameraView
-    App->>Boat: root().collect(items)
-    App->>Course: root().collect(items), appendLines(lines)
-    App->>R: render(FrameContext, items, lines, water, waves, sky, toggles)
+    App->>Boat: root().collect(lists.opaque)
+    App->>Course: root().collect(lists.opaque), appendLines(lists.lines)
+    note over App: Track A slot: more collect() calls, lists.transparent passes, frame.spot
+    App->>R: render(FrameContext, RenderLists, water, waves, sky, toggles)
     opt screenshot requested or capture finished
         App->>App: saveScreenshot() (glReadPixels before ImGui)
     end
@@ -622,6 +647,9 @@ sequenceDiagram
     R->>HDR: drawOpaque: pbr shader, per item: model, normal matrix, material, maps
     R->>HDR: drawWater: water shader, 8 wave uniforms, gridOffset, ripples, wireframe?
     R->>HDR: drawLines: curve, handles, points (dynamic VBO)
+    opt lists.transparent not empty
+        R->>HDR: drawTransparent: blending on, depth writes off, call each ExtraPass(frame)
+    end
     opt skybox on and not orthographic
         R->>HDR: drawSkybox: fullscreen triangle at depth 1, LEQUAL
     end
@@ -761,6 +789,7 @@ flowchart TD
 | Opaque | `HdrTarget` RGBA16F | `pbr_vert/frag` | no back-face culling (sail) |
 | Water | `HdrTarget` | `water_vert/frag` | optional `glPolygonMode(GL_LINE)` |
 | Lines | `HdrTarget` | `line_vert/frag` | round points via `gl_PointCoord` |
+| Extra transparent passes | `HdrTarget` | the feature's own | `RenderLists::transparent`; blending on, depth writes off |
 | Skybox | `HdrTarget` | `skybox_vert/frag` | depth 1, `GL_LEQUAL`, skipped in top view |
 | Tonemap | default framebuffer | `fullscreen_vert` + `post_frag` | exposure → ACES → gamma 2.2 |
 | Shadow-map view | default framebuffer corner | `fullscreen_vert` + `depth_debug_frag` | compare mode off while drawing |
@@ -800,6 +829,23 @@ materials flip N towards the viewer.
 - Top: `glm::ortho` around the course, 500 m up; the renderer disables fog and the skybox.
 - Orbit: yaw/pitch/distance around the boat.
 - Perspective: 55° vertical FOV, near 0.2 m, far 2000 m.
+
+### 7.12 Extension points (how a new feature plugs in)
+
+Added so the two of us can build features in parallel without editing each other's files.
+
+| You want to… | Use | Where |
+|---|---|---|
+| Draw new opaque meshes (lit, shadowed) | Build a `SceneNode` tree, `collect()` it into `lists.opaque` | Track A slot in `Application::run` |
+| Draw something blended (particles, beams) | `lists.transparent.push_back([this](const FrameContext& f) { … })` — your own shader/VAO; state contract in `renderer.h` | Track A slot in `Application::run` |
+| Add a second light | Fill `frame.spot` (`SpotLight`, [lights.h](../src/lights.h)); the renderer reads it | Track A slot in `Application::run` |
+| Deform a mesh with blend shapes | Upload `target − base` positions/normals as vertex attributes 4 and 5, set `SceneNode::blendWeight`. `pbr_vert.glsl` and `shadow_vert.glsl` already apply `blendWeight · delta`; meshes without those attributes read (0, 0, 0) | `mesh.cpp` (GPUMesh upload), your scene code |
+| Animate a texture (flipbook) | Change `PBRMaterial::uvScale/uvOffset` each frame from the simulation time; the shader uses `uv · uvScale + uvOffset` | your scene code |
+| Add a toggle | Field in `FeatureToggles` (your track's section), entry in `applySetting()` (your track's comment), UI method + one call in `drawUi()` (your track's slot) | `feature_toggles.h`, `application.cpp` |
+| Add a source file | One line in your track's section of `add_executable` | `CMakeLists.txt` |
+
+Every shared file has `// ---- Track A …` and `// ---- Track B …` comment slots, so your additions land
+in different places and git merges them without conflicts.
 
 ---
 

@@ -34,6 +34,7 @@ uniform float metallicFactor;
 uniform vec3 emissive;
 uniform bool doubleSided;
 uniform vec2 uvScale;
+uniform vec2 uvOffset; // e.g. the current frame of a flipbook atlas
 uniform sampler2D albedoMap;
 uniform sampler2D normalMap;
 uniform sampler2D roughnessMap;
@@ -126,7 +127,7 @@ vec3 applyFog(vec3 color)
 
 void main()
 {
-    vec2 uv = fragTexCoord * uvScale;
+    vec2 uv = fragTexCoord * uvScale + uvOffset;
     vec3 N = normalize(fragNormal);
     vec3 V = viewVector();
     if (doubleSided && dot(N, V) < 0.0)

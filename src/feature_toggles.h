@@ -56,4 +56,8 @@ struct FeatureToggles {
     bool dayNightCycle { false };
     float dayLengthSeconds { 120.0f };
     float exposure { 1.0f };
+
+    // ---- Track A features (island, particles, sail blend shapes, flag, free sailing) ----
+
+    // ---- Track B features (bloom, spotlight, minimap, foam) ----
 };

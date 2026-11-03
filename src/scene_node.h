@@ -36,6 +36,7 @@ public:
     glm::mat4 rest;
     glm::mat4 anim { 1.0f };
     glm::mat4 world { 1.0f };
+    float blendWeight { 0.0f }; // blend-shape weight passed to the shaders (see DrawItem)
     bool visible { true };
     std::vector<std::unique_ptr<SceneNode>> children;
 };

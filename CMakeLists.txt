@@ -26,6 +26,11 @@ add_executable(Master_TechDemo
     "src/course.cpp"
     "src/renderer.cpp"
     "src/shadow_map.cpp"
+
+    # ---- Track A files (island, particles, flag, ...) ----
+
+    # ---- Track B files (bloom, minimap, ...) ----
+
 )
 
 target_compile_definitions(Master_TechDemo PRIVATE RESOURCE_ROOT="${CMAKE_CURRENT_LIST_DIR}/")
