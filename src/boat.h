@@ -18,21 +18,7 @@ DISABLE_WARNINGS_POP()
 class BezierPath;
 class Waves;
 
-// The sailboat: its meshes, materials and transformation hierarchy.
-//
-//   Boat (anim: course position, heading, heave/pitch/roll from the waves, heel from the wind)
-//   └─ Hull
-//      ├─ Deck, Cabin, Rigging
-//      ├─ Rudder (anim: turns with the course curvature)
-//      │  └─ Tiller
-//      ├─ Mast
-//      │  ├─ Boom (anim: swings to leeward, rate-limited so tacks/gybes are visible)
-//      │  │  └─ Sail (blend shape flat -> full; weight = billow depth, sign = side)
-//      │  └─ WindVane (anim: points into the wind)
-//      ├─ DeckCamera (no mesh; the deck viewpoint)
-//      └─ Bow, Stern (no mesh; where the spray and the wake start)
-//
-// The constructor needs an OpenGL context (it uploads meshes and textures); update() is pure math.
+
 class Boat {
 public:
     Boat();

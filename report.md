@@ -1,11 +1,11 @@
-# 3D Graphics and Animation Tech demo | A Sailboat, an island and a light house 
+# 3D Graphics and Animation Tech demo | A Sailboat, an island and a lighthouse 
 Ethan de Beer and Gergo Vadasz
 Team 55
 
 ## Work done:
 We split the project into two tracks that could be built in parallel with few merge conflicts. Track A (Gergo Vadasz) covers the world and the simulation: new objects in the scene, their CPU logic and their own meshes and shaders. Track B (Ethan de Beer) covers the render pipeline: new passes, post-processing and lights. Before the split we built a shared skeleton with all seven minimal requirements. We also built a small interface (B0): draw hooks for opaque and transparent objects, a per-draw blend weight, a UV scale and offset in the PBR material, and slots in the UI. Because of it, no Track A feature had to edit the renderer or the shared shaders.
 
-Each feature has one owner. It was built on its own branch and merged into main through a pull request reviewed by the other member. Every feature can be switched on and off in the UI and from the command line (--set name=0/1), so each on/off screenshot pair is one command.
+Each feature has one owner and was built on its own branch. Most were merged into main through a pull request that the other member merged. Every feature can be switched on and off in the UI and from the command line (--set name=0/1), so each on/off screenshot pair is one command.
 
 | Feature | Gergo Vadasz | Ethan de Beer |
 |---|---|---|
@@ -24,10 +24,10 @@ Each feature has one owner. It was built on its own branch and merged into main 
 | Report and video | [50] % | [50] % |
 
 ## Track A - Gergo Vadasz
-Track A adds five features to the scene. None of them changes the renderer. They draw through the B0 hooks and the shared PBR shader.
+Track A adds five features to the scene. None of them changes the renderer or the shared shaders: they draw through the B0 hooks, with the shared PBR shader or, for the particles, their own shader pair.
 
 ### A1 - Island and Lighthouse
-I placed an island with a lighthouse on top of it in the middle of the map. It adds a second object to the hierarchy next to the boat, and gives B2 a source to work with.The lamp in the lighthouse is turning constantly, fades in at dusk and fades out at dawn. At night, it glows via the bloom pass implemented in B1. Toggles: island, lighthouseSpeed.
+We placed an island with a lighthouse on top of it in the middle of the course. It adds a second object hierarchy next to the boat's, and its lamp is the source of B2's spotlight. The lamp turns constantly, fades on at dusk and off at dawn, and at night glows through the bloom pass from B1. Toggles: island, lighthouseSpeed.
 
 ![The procedural island by day](<screenshots/Island and lighthouse/a1_island_day.png>)
 
@@ -39,14 +39,14 @@ chosen from height and slope.*
 *Figure 2. At dusk the lamp fades on. Its HDR emission feeds the bloom (B1), and its spotlight (B2)
 lights the water next to the boat.*
 
-The lighthouse is built in code as Island → {Terrain, Lighthouse → Tower (+ Bands) → Gallery → LampHouse → Lamp}. The lamp's animation matrix is R_y(θ). The angle θ is integrated from the speed slider, so moving the slider never makes the beam jump. lampLight() turns the Lamp node's world matrix into a spotlight: its position is world[3], and its direction is the lamp's +z axis, tilted down to reach the water where the boat goes when it is tied to the course. 
+The lighthouse is built in code as Island → {Terrain, Lighthouse → Tower (+ Bands) → Gallery → LampHouse → Lamp}. The lamp's animation matrix is R_y(θ). The angle θ is integrated from the speed slider, so moving the slider never makes the beam jump. lampLight() turns the Lamp node's world matrix into a spotlight: its position is world[3], and its direction is the lamp's +z axis, tilted down so that the beam reaches the water along the course. 
 
 ![The beam sweeping the course, seen from above](<screenshots/Island and lighthouse/a1_beam_sweep_top.png>)
 
 *Figure 3. Top view at night, 1.5 s apart. The Lamp node turns, and the spotlight built from its world
 matrix sweeps round the course. The red dot is the boat.*
 
-We generate the terrain so it needs no external assets and can be shaped exactly around the course. Its shore radius is also the collision circle in A5. We bake the materials into textures instead of blending them per pixel in a separate terrain shader. That way the island uses the shared PBR shader unchanged, gets shadows, image-based lighting and normal mapping for free, and stays out of Track B's files. The cost is the top-down UV projection, which stretches the texture on the steepest cliffs. Triplanar mapping [3] would fix that, but it needs its own shader. The lamp is emissive, with an HDR colour well above the bloom threshold. It is left out of its own spot shadow map: the light sits inside the lamp box, whose faces would otherwise block the whole cone.
+The terrain is a height field of fractal value noise (fBm), faded into a flat seabed by a radial falloff so that it crosses the waterline at the coast. We generate it so it needs no external assets and can be shaped exactly around the course; its shore radius is also the collision circle in A5. Sand, grass and rock are chosen from height and slope and baked into textures, instead of being blended per pixel in a separate terrain shader. That way the island uses the shared PBR shader unchanged, gets shadows, image-based lighting and normal mapping for free, and stays out of Track B's files. The cost is the top-down UV projection, which stretches the texture on the steepest cliffs. Triplanar mapping [1] would fix that, but it needs its own shader. The lamp is emissive, with an HDR colour well above the bloom threshold. It is left out of its own spot shadow map: the light sits inside the lamp box, whose faces would otherwise block the whole cone.
 
 ### A2 - Spray and Wake 
 Spray flies up from the bow and a foam wake trails behind the boat. More spray is thrown up when the boat is faster and when the bow hits the waves harder. The droplets drift with the wind and fall back into the sea. The foam floats on the waves and spreads out before it fades. A fixed pool of 4000 particles holds the 450–1500 that are usually alive. Toggles: particles, particleRate.
@@ -56,12 +56,12 @@ Spray flies up from the bow and a foam wake trails behind the boat. More spray i
 *Figure 4. The same moment with particles on (left) and off (right). B4's crest foam is switched off
 in both, so only the particles differ.*
 
-The two emitters are nodes without a mesh, Bow and Stern, in the boat's hierarchy, so they follow its heave, pitch and heel. To draw, the particles are sorted back to front and uploaded into one instance buffer. A single glDrawArraysInstanced call draws one quad per particle (glVertexAttribDivisor = 1). Spray quads face the camera, spanned by its right and up vectors while foam quads lie flat. The fragment shader draws a soft procedural puff with premultiplied alpha [5]. It lights the puff with wrapped diffuse light [6] and a forward-scattering lobe, so spray glows against a low sun. [4] is the classic reference for particle systems.
+The two emitters are nodes without a mesh, Bow and Stern, in the boat's hierarchy, so they follow its heave, pitch and heel. As in a classic particle system [2], the particles are simulated on the CPU with the real frame time; the same Gerstner sum that the water shader draws, evaluated on the CPU, tells spray where to die and foam where to float. To draw, the particles are sorted back to front and uploaded into one instance buffer. A single glDrawArraysInstanced call draws one quad per particle (glVertexAttribDivisor = 1). Spray quads face the camera, spanned by its right and up vectors, while foam quads lie flat. The fragment shader draws a soft procedural puff with premultiplied alpha [3]. It lights the puff with wrapped diffuse light [4] and a forward-scattering lobe, so spray glows against a low sun.
 
-OpenGL 4.1, our limit on macOS, has no compute shaders. About a thousand particles are cheap on the CPU, and the CPU already has the wave-height query. A fixed pool means nothing is allocated after start-up, and the whole pool is uploaded in one call. Instancing sends 28 bytes per particle instead of four full vertices, and needs one draw call. We chose sorted "over" blending rather than additive blending. Additive blending needs no sort, but washes spray out to white by day and makes it glow at night. Order-independent transparency [7] would need extra render targets in the renderer, while sorting this few particles is cheap and exact. One artefact remains: a faint straight edge where a large quad cuts through the hull or the water. Soft particles [8] would fade it, but need the scene depth as a texture.
+OpenGL 4.1, our limit on macOS, has no compute shaders. About a thousand particles are cheap on the CPU, and the CPU already has the wave-height query. A fixed pool means nothing is allocated after start-up, and the whole pool is uploaded in one call. Instancing sends 28 bytes per particle instead of four full vertices, and needs one draw call. We chose sorted "over" blending rather than additive blending. Additive blending needs no sort, but washes spray out to white by day and makes it glow at night. Order-independent transparency [5] would need extra render targets in the renderer, while sorting this few particles is cheap and exact. One artefact remains: a faint straight edge where a large quad cuts through the hull or the water. Soft particles [6] would fade it, but need the scene depth as a texture.
 
 ### A3 - Sail Blend Shapes 
-The sail fills with wind through a blend shape, which replaces the earlier trick of scaling the sail node in x. The base mesh is a flat triangle. The weight follows the wind strength, and its sign follows the side the boom is on, so the sail bulges to leeward on both tacks. The weight is smoothed over time, so during a tack or jibe the sail goes through flat to the other side instead of flipping. Toggles: sailShapeOverride and sailShapeWeight set the fullness by hand.
+The sail fills with wind through a blend shape [7, 8], which replaces the earlier trick of scaling the sail node in x. The base mesh is a flat triangle; the target is a full sail with 10 % camber, deepest at 40 % of the chord, and 12° of extra twist at the head. A weight w blends between the two. It follows the wind strength, and its sign follows the side the boom is on, so the sail bulges to leeward on both tacks. The weight is smoothed over time, so during a tack or jibe the sail goes through flat to the other side instead of flipping. Toggles: sailShapeOverride and sailShapeWeight set the fullness by hand.
 
 ![The sail at blend weights 0, 0.5 and 1](<screenshots/Sail blend shapes/a3_weights_edge_on.png>)
 
@@ -79,20 +79,22 @@ The old scale matrix had three problems:
 A blend shape can store any deformation with the same topology, here camber and twist together. It costs 24 bytes per vertex and one multiply-add. We considered three alternatives:
 
 - skinning, which suits jointed motion more than a smooth billow
-- a cloth simulation [11], which would need collisions with the mast and boom and a stable integrator
+- a cloth simulation [9], which would need collisions with the mast and boom and a stable integrator
 - morphing on the CPU, which re-uploads the mesh every frame
 
-Linear blending is exact for the camber, but only approximate for the twist, which is a rotation. At weight −1, the full sail on the other side, the head is a few centimetres from a true mirror image. Future work: a third shape for luffing, the sail flapping when the boat points into the wind. References: [9, 10].
+Linear blending is exact for the camber, but only approximate for the twist, which is a rotation. At weight −1, the full sail on the other side, the head is a few centimetres from a true mirror image. Future work: a third shape for luffing, the sail flapping when the boat points into the wind.
 
 ### A4 - Animated Flag Textures 
-We put our countries' flags on the stern of the boat. Their texture is a flipbook of 4 × 4 frames of the cloth rippling. It is stepped through at a rate set in the UI and raised by the wind: fps · (0.25 + 0.75 · wind strength). The flags are delayed in their frame starts so they don't mirror each other in their animation. Both flags swing round their staffs to stream downwind. The UI can freeze the flipbook on any frame, which makes two-frame screenshots easy. Toggles: flag, flagFps, flagFreeze, flagFrame.
+We put our countries' flags, Hungarian and South African, on the stern of the boat. Their texture is a flipbook of 4 × 4 frames of the cloth rippling. It is stepped through at a rate set in the UI and raised by the wind: fps · (0.25 + 0.75 · wind strength). The second flag runs five frames ahead, so the two don't flutter in step. Both flags swing round their staffs to stream downwind. The UI can freeze the flipbook on any frame (Figure 6). Toggles: flag, flagFps, flagFreeze, flagFrame.
 
 ![The flags at flipbook frames 0 and 8](<screenshots/Animated flag textures/a4_flag_frames_0_8.png>)
 
 *Figure 6. The flags frozen at frames 0 and 8. Only `uvOffset` differs, and the ripple is half a cycle
 apart.*
 
-The frame depends on simulation time, not on how many frames were rendered. Stepping one atlas frame per rendered frame would make the flag flutter twice as fast at 120 fps as at 60 fps, and stall when the frame rate drops. We integrate the phase instead of computing ⌊t · fps⌋ directly. The two are the same at a fixed rate, but with the integrated phase, moving the slider or a change in wind never makes the animation jump. With one atlas and moving UVs, the texture is bound once and only one vec2 uniform changes per frame, instead of swapping between 16 textures. A texture array would avoid bleeding altogether, but needs a different sampler in the shared shader. The gutters keep bilinear filtering and mipmaps [12, 13] from mixing neighbouring frames into the edges. The cloth's geometry does not move, apart from the swing. A vertex wave, or a blend shape like A3's, would add a real flap.
+Each flipbook frame is one cell of a 4 × 4 atlas generated in code, with a 4-texel gutter around each picture that repeats its edge. On every rendered frame we advance a phase φ ← (φ + fps · dt) mod 16 and set the material's uvOffset to atlas cell ⌊φ⌋. The shared PBR shader already samples at uv · uvScale + uvOffset (B0), so the renderer does not change.
+
+The frame depends on simulation time, not on how many frames were rendered. Stepping one atlas frame per rendered frame would make the flag flutter twice as fast at 120 fps as at 60 fps, and stall when the frame rate drops. We integrate the phase instead of computing ⌊t · fps⌋ directly. The two are the same at a fixed rate, but with the integrated phase, moving the slider or a change in wind never makes the animation jump. With one atlas and moving UVs, the texture is bound once and only one vec2 uniform changes per frame, instead of swapping between 16 textures. The gutters keep bilinear filtering and mipmaps [10, 11] from mixing neighbouring frames into the edges; a texture array would avoid this bleeding altogether, but needs a different sampler in the shared shader. The cloth's geometry does not move, apart from the swing. A vertex wave, or a blend shape like A3's, would add a real flap.
 
 ### A5 - Free Sailing and Collision
 With free sailing on (the F key or the UI), the player steers with A/D or the arrow keys instead of following the Bézier course. The boat can then hit the five buoys and the island:
@@ -111,13 +113,13 @@ speed it hit with, spray bursts at the contact point, and the buoy rocks as a da
 
 The boat's velocity is split into a part along its heading and a sideways part:
 
-- the heading part moves towards the speed the existing polar gives for the boat's angle to the wind, with a time constant of 2.5s (the sail)
+- the heading part moves towards the speed the existing polar gives for the boat's angle to the wind, with a time constant of 2.5 s (the sail)
 - the sideways part decays towards zero with a time constant of 0.5 s (the keel)
 - the yaw rate is proportional to the rudder angle times the forward speed. This gives a constant turning circle of about 17 m, and no turning when the boat is stopped
 
-The response pushes the boat out along the contact normal by the overlap. It reflects the normal part of the velocity with a restitution of 0.3, and keeps the tangential part, so a glancing hit slides past [14, 15]. The buoy's tilt is the closed-form response of a damped spring to an impulse, A · e^(−t/τ) · sin(ωt), evaluated at the time since the hit.
+Collisions are tested in the water plane. The hull is two circles of radius 1.25 m, 2.2 m ahead of and behind amidships; the buoys (radius 0.7 m) and the island are circles too, so a hit is a distance between two centres below the sum of their radii. The response pushes the boat out along the contact normal by the overlap. It reflects the normal part of the velocity with a restitution of 0.3, and keeps the tangential part, so a glancing hit slides past [12, 13]. The buoy's tilt is the closed-form response of a damped spring to an impulse, A · e^(−t/τ) · sin(ωt), evaluated at the time since the hit.
 
-One circle would be too wide or too short for a long hull. An oriented box or a test against the mesh is much more code for six obstacles. Two circles need only a distance test and give the contact normal for free. Pushing out and reflecting needs no stiff penalty springs to tune, and never lets the boat sink into an obstacle. Checking once per frame is enough. At the speed slider's maximum of 15 m/s and the clamped time step of 0.1 s, the boat moves 1.5 m per step. That is far less than the 3.9 m it would need to pass through a buoy, so continuous collision detection is not needed. A physics engine would add a dependency without connecting to the wind and polar model that the rest of the demo uses. The buoy's closed-form rocking is exact and stable at any frame rate. The limitations are: 
+One circle would be too wide or too short for a long hull. An oriented box or a test against the mesh is much more code for six obstacles. Two circles need only a distance test and give the contact normal for free. Pushing out and reflecting needs no stiff penalty springs to tune, and never lets the boat sink into an obstacle. Checking once per frame is enough. At the speed slider's maximum of 15 m/s, and with the time step clamped to at most 0.1 s, the boat moves 1.5 m per step. That is far less than the 3.9 m, 2 × (1.25 m + 0.7 m), it would need to pass clean through a buoy, so continuous collision detection is not needed. A physics engine would add a dependency without connecting to the wind and polar model that the rest of the demo uses. The buoy's closed-form rocking is exact and stable at any frame rate. The limitations are: 
 
 - off-centre hits don't spin the boat (there is no moment of inertia)
 - the island is a single circle, so in its bays the boat stops short of the beach
@@ -241,25 +243,22 @@ We added an opaque-geometry depth/normal prepass, followed by half-resolution SS
 ## References
 
 ### Track A references
-1. K. Perlin, "An Image Synthesizer", SIGGRAPH 1985.
-2. D. S. Ebert, F. K. Musgrave, D. Peachey, K. Perlin, S. Worley, *Texturing and Modeling: A
-   Procedural Approach*, 3rd ed., Morgan Kaufmann, 2003 (fBm and procedural terrain).
-3. R. Geiss, "Generating Complex Procedural Terrains Using the GPU", *GPU Gems 3*, ch. 1, 2007
+1. R. Geiss, "Generating Complex Procedural Terrains Using the GPU", *GPU Gems 3*, ch. 1, 2007
    (triplanar texturing).
-4. W. T. Reeves, "Particle Systems: A Technique for Modeling a Class of Fuzzy Objects", SIGGRAPH 1983.
-5. T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH 1984 (premultiplied alpha, "over").
-6. S. Green, "Real-Time Approximations to Subsurface Scattering", *GPU Gems*, ch. 16, 2004 (wrap
+2. W. T. Reeves, "Particle Systems: A Technique for Modeling a Class of Fuzzy Objects", SIGGRAPH 1983.
+3. T. Porter, T. Duff, "Compositing Digital Images", SIGGRAPH 1984 (premultiplied alpha, "over").
+4. S. Green, "Real-Time Approximations to Subsurface Scattering", *GPU Gems*, ch. 16, 2004 (wrap
    lighting).
-7. M. McGuire, L. Bavoil, "Weighted Blended Order-Independent Transparency", JCGT 2(2), 2013.
-8. T. Lorach, "Soft Particles", NVIDIA whitepaper, 2007.
-9. J. P. Lewis, K. Anjyo, T. Rhee, M. Zhang, F. Pighin, Z. Deng, "Practice and Theory of Blendshape
+5. M. McGuire, L. Bavoil, "Weighted Blended Order-Independent Transparency", JCGT 2(2), 2013.
+6. T. Lorach, "Soft Particles", NVIDIA whitepaper, 2007.
+7. J. P. Lewis, K. Anjyo, T. Rhee, M. Zhang, F. Pighin, Z. Deng, "Practice and Theory of Blendshape
    Facial Models", Eurographics 2014 State of the Art Report.
-10. T. Lorach, "DirectX 10 Blend Shapes: Breaking the Limits", *GPU Gems 3*, ch. 3, 2007.
-11. D. Baraff, A. Witkin, "Large Steps in Cloth Simulation", SIGGRAPH 1998.
-12. L. Williams, "Pyramidal Parametrics", SIGGRAPH 1983 (mipmapping).
-13. NVIDIA, "Improve Batching Using Texture Atlases", SDK whitepaper, 2004.
-14. C. Ericson, *Real-Time Collision Detection*, Morgan Kaufmann, 2004.
-15. D. Baraff, "Physically Based Modeling: Rigid Body Simulation", SIGGRAPH course notes, 2001.
+8. T. Lorach, "DirectX 10 Blend Shapes: Breaking the Limits", *GPU Gems 3*, ch. 3, 2007.
+9. D. Baraff, A. Witkin, "Large Steps in Cloth Simulation", SIGGRAPH 1998.
+10. L. Williams, "Pyramidal Parametrics", SIGGRAPH 1983 (mipmapping).
+11. NVIDIA, "Improve Batching Using Texture Atlases", SDK whitepaper, 2004.
+12. C. Ericson, *Real-Time Collision Detection*, Morgan Kaufmann, 2004.
+13. D. Baraff, "Physically Based Modeling: Rigid Body Simulation", SIGGRAPH course notes, 2001.
 
 ### Track B references
 
