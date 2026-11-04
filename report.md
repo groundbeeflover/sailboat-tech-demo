@@ -128,21 +128,115 @@ One circle would be too wide or too short for a long hull. An oriented box or a 
 
 ### B1. Bloom
 
-We implemented bloom as an HDR post-processing effect to imitate the spread of light around bright sources, such as the sun, glints on the ocean and the lighthouse lamp. First, a soft-knee brightness threshold extracts highlights from the linear RGBA16F scene buffer at half resolution. A separable Gaussian filter blurs the result by alternating horizontal and vertical framebuffer passes. Bilinear sampling combines adjacent taps, reducing a nine-tap convolution to five texture fetches per direction. Finally, the blurred highlights are added to the scene before exposure and ACES tone mapping, preserving HDR intensities. We chose this method over a multi-resolution mip pyramid because it is compact, easy to parameterise and visually appropriate for the scene, although a pyramid would offer broader glow and potentially better performance for large radii. The UI exposes the threshold, intensity, iterations and a debug view so the effect can be evaluated independently.
+We implemented bloom as an HDR post-processing effect to imitate the spread of light around bright sources, such as the sun, glints on the ocean and the lighthouse lamp. First, a soft-knee brightness threshold extracts highlights from the linear RGBA16F scene buffer at half resolution. A separable Gaussian filter blurs the result by alternating horizontal and vertical framebuffer passes. Bilinear sampling combines adjacent taps, reducing a nine-tap convolution to five texture fetches per direction. Finally, the blurred highlights are added to the scene before exposure and ACES tone mapping, preserving HDR intensities. We chose this method over a multi-resolution mip pyramid because it is compact, easy to parameterise and visually appropriate for the scene, although a pyramid would offer broader glow and potentially better performance for large radii. The UI exposes the threshold, intensity, iterations and a debug view so the effect can be evaluated independently. The implementation follows the HDR bloom structure in [18], with the existing filmic tonemapping fit [20]; the multi-scale method in [19] was considered but not adopted.
+
+| Bloom disabled | Bloom enabled |
+|:---:|:---:|
+| ![Bloom disabled](<screenshots/Bloom/Bloom off.png>) | ![Bloom enabled](<screenshots/Bloom/Bloom on.png>) |
+
+*Figure 8. Bloom off (left) and on (right) from the same deck view. The effect adds a subtle halo to the sun and bright reflections; the captured difference is small at this exposure.*
 
 ### B2. Lighthouse spotlight and second shadow map
 
-We added a second shadow-casting light sourced from the animated lighthouse node. Unlike the sun's parallel directional rays, the lighthouse emits a finite cone, so its shadow map uses a 1024×1024 perspective projection fitted to the outer cone angle and light range. The renderer first records the opaque scene's depths from the lamp, then shades the boat, island and Gerstner water with a local Cook–Torrance direct-light term, inverse-square attenuation and a smooth spotlight cone. Projected receiver positions are compared to the lamp depth texture with hardware PCF and slope-dependent bias. The spotlight has an independent depth bias because perspective depth is non-linear; this reduces self-shadow acne without over-offsetting the shadows. We reused the existing depth-map class and shadow shaders to limit duplicated code, at the cost of a second depth pass whenever the lamp casts shadows. The independent spotlight and shadow toggles allow comparison of no lamp, unshadowed lamp and shadowed lamp, while the debug view shows the actual perspective map. Bright illuminated areas pass into the existing HDR Bloom pipeline.
+We added a second shadow-casting light sourced from the animated lighthouse node. Unlike the sun's parallel directional rays, the lighthouse emits a finite cone, so its shadow map uses a 1024×1024 perspective projection fitted to the outer cone angle and light range. The renderer first records the opaque scene's depths from the lamp, then shades the boat, island and Gerstner water with a local Cook–Torrance direct-light term, inverse-square attenuation and a smooth spotlight cone. Projected receiver positions are compared to the lamp depth texture with hardware PCF and slope-dependent bias. The spotlight has an independent depth bias because perspective depth is non-linear; this reduces self-shadow acne without over-offsetting the shadows. We reused the existing depth-map class and shadow shaders to limit duplicated code, at the cost of a second depth pass whenever the lamp casts shadows. The independent spotlight and shadow toggles allow comparison of no lamp, unshadowed lamp and shadowed lamp, while the debug view shows the actual perspective map. Bright illuminated areas pass into the existing HDR Bloom pipeline. During integration, the lamp mesh initially occluded its own spotlight because the light originated inside it; we corrected this by excluding only that emitting mesh from the spotlight depth pass, while keeping it in the ordinary scene and directional-shadow passes. See [21, 22].
+
+
+| Lighthouse light off | Lighthouse light with shadows |
+|:---:|:---:|
+| ![Lighthouse light off](<screenshots/Lighthouse spotlight and second shadow map/b2_light_off.png>) | ![Lighthouse light with shadows](<screenshots/Lighthouse spotlight and second shadow map/b2_light_shadowed.png>) |
+
+*Figure 9. Nighttime scene with the lighthouse light off (left) and enabled with spotlight shadows (right). The lighting difference is subtle at this camera angle; the separate debug image below shows the perspective depth map.*
+
+![Spotlight shadow-map debug view](<screenshots/Lighthouse spotlight and second shadow map/b2_shadow_debug.png>)
+
+*Figure 9a. The spotlight shadow-map debug overlay visualises the light-view depth texture. The supplied unshadowed and shadowed scene screenshots are identical, so they do not by themselves demonstrate the shadow comparison.*
+
+#### Visible lighthouse beam (B2 extra)
+
+The B2 spotlight illuminates surfaces but does not make the light visible in empty air. We therefore generate three nested cone shells aligned with the rotating lamp's position, direction and outer angle. Their 32 radial segments and 18 longitudinal rings are built once, and the fragment shader fades intensity along the cone. We render them in the existing transparent-object pass with depth testing, disabled depth writes and additive blending (`SRC_ALPHA, ONE`), before Bloom. This is inexpensive and works with the scene's HDR buffer, but it is a stylised surface approximation rather than physically simulated scattering; objects do not cast volumetric shadows inside the beam. More complete light-shaft methods are discussed in [28]. Toggles: `spotBeam`, `spotBeamOpacity`.
+
+
+| Visible beam off | Visible beam on |
+|:---:|:---:|
+| ![Visible beam off](<screenshots/extra_beam_off.png>) | ![Visible beam on](<screenshots/extra_beam_on.png>) |
+
+*Figure 12. At night, enabling the translucent cone makes the rotating lighthouse beam visible in the air; the underlying spotlight still lights the scene in both cases.*
 
 ### B3. Minimap
 
-We implemented a live minimap using a second, independent top-down orthographic camera and render-to-texture framebuffers. The course is projected from above into a small HDR colour and depth target, reusing the same PBR objects, procedural island, water and course lines as the main camera. The map is tone-mapped with the existing ACES pass into a display-ready RGBA8 texture and shown in a movable ImGui window. A heading marker indicates the boat's orientation; the user can switch from fixed course-up to boat-heading-up orientation. We skip redundant shadow-map construction, Bloom, skybox and particles to limit the overhead of rendering the scene twice, and we use a small image resolution. Re-rendering the scene is more expensive than drawing a static 2D diagram, but it remains correct as the world animates and directly demonstrates an additional camera and off-screen rendering technique. We also added a capture-only overlay because the project's scripted screenshot path runs before ImGui.
+We implemented a live minimap using a second, independent top-down orthographic camera and render-to-texture framebuffers. The course is projected from above into a small HDR colour and depth target, reusing the same PBR objects, procedural island, water and course lines as the main camera. The map is tone-mapped with the existing ACES pass into a display-ready RGBA8 texture and shown in a movable ImGui window. A heading marker indicates the boat's orientation; the user can switch from fixed course-up to boat-heading-up orientation. We skip redundant shadow-map construction, Bloom, skybox and particles to limit the overhead of rendering the scene twice, and we use a small image resolution. Re-rendering the scene is more expensive than drawing a static 2D diagram, but it remains correct as the world animates and directly demonstrates an additional camera and off-screen rendering technique. We also added a capture-only overlay because the project's scripted screenshot path runs before ImGui. The framebuffer and texture display interfaces follow the bundled GLM/ImGui APIs and the off-screen rendering pattern in [23–25].
+
+| Minimap off | Minimap on |
+|:---:|:---:|
+| ![Minimap off](<screenshots/Minimap/b3_minimap_off.png>) | ![Minimap on](<screenshots/Minimap/b3_minimap_on.png>) |
+
+*Figure 10. Identical sailing view with the minimap disabled and enabled. The top-down render is composited in the upper-right corner of the capture.*
+
+![Heading-up minimap](<screenshots/Minimap/b3_heading_up.png>)
+
+*Figure 10a. The heading-up mode rotates the minimap orientation with the boat while retaining a top-down orthographic projection.*
 
 ### B4. Crest foam
 
-We added foam to the Gerstner ocean by measuring compression in the wave's horizontal displacement. The water vertex shader analytically accumulates the 2×2 horizontal deformation gradient while calculating the same Gerstner waves used by the boat's buoyancy simulation. The determinant of this matrix, J, measures local surface-area compression: J=1 on flat water and lower values indicate converging crests. We map this quantity to foam coverage using a tunable smooth threshold, then modulate it with two scrolling samples of our existing tileable ripple-normal texture to prevent solid white stripes. The foam is shaded using ambient skylight, shadowed sunlight and the lighthouse light, and blended with the HDR water colour before fog and tone mapping. This shader-only technique makes foam respond to wind and wave-height changes at low implementation complexity without changing the waves, buoyancy or render targets. It is an instantaneous stylised effect: it does not simulate how foam persists, drifts or decays after a wave breaks.
+We added foam to the Gerstner ocean by measuring compression in the wave's horizontal displacement. The water vertex shader analytically accumulates the 2×2 horizontal deformation gradient while calculating the same Gerstner waves used by the boat's buoyancy simulation. The determinant of this matrix, J, measures local surface-area compression: J=1 on flat water and lower values indicate converging crests. We map this quantity to foam coverage using a tunable smooth threshold, then modulate it with two scrolling samples of our existing tileable ripple-normal texture to prevent solid white stripes. The foam is shaded using ambient skylight, shadowed sunlight and the lighthouse light, and blended with the HDR water colour before fog and tone mapping. This shader-only technique makes foam respond to wind and wave-height changes at low implementation complexity without changing the waves, buoyancy or render targets. It is an instantaneous stylised effect: it does not simulate how foam persists, drifts or decays after a wave breaks. The Gerstner-wave derivation follows the project wave model [17], with broader ocean-rendering context in [26, 27]; the temporal extension is described below under B5.
+
+| Crest foam off | Crest foam on |
+|:---:|:---:|
+| ![Crest foam off](<screenshots/Crest Foam/b4_off.png>) | ![Crest foam on](<screenshots/Crest Foam/b4_on.png>) |
+
+*Figure 11. The same rough-sea view without and with Jacobian-based crest foam: compression highlights the wave crests rather than all elevated water.*
+
+#### Temporal crest foam (B4 Extra)
+
+B4 only identifies crests at the present time. To let foam linger, we added two 512×512 R16F textures which ping-pong a history over a 230×230 m world-space region centred on the boat. For each texel the shader evaluates the same Gerstner-wave compression as B4, reprojects the previous history into the current region and updates it using `F_new = max(F_instant, F_previous × exp(-dt / lifetime))`. The default decay lifetime is 1.7 s. World-space history avoids the camera ghosting of screen-space accumulation; it is reset after a large jump or when waves are disabled. This approximates the birth and decay of whitecaps but does not advect individual foam patches or solve fluid dynamics [26, 27]. Toggles: `temporalFoam`, `foamLifetime`.
+
+
+| Instantaneous foam | Temporal foam |
+|:---:|:---:|
+| ![Instantaneous foam](<screenshots/extra_foam_instant.png>) | ![Temporal foam](<screenshots/extra_foam_temporal.png>) |
+
+*Figure 13. The original crest mask (left) compared with the history-accumulated foam (right). A single frame illustrates the coverage difference, while persistence is more apparent in motion.*
 
 ### B5. Stretch
+
+In addition to B1–B4, we implemented both optional Track B extensions and the three B-stretch techniques proposed in our TODO [16, 17]. Each is independently toggleable. The more costly additions are disabled by default, allowing on/off comparisons without changing the original renderer.
+
+#### Sailcloth translucency
+
+The sail remains opaque but gains a thin-material transmission term so light arriving from its back can illuminate the viewer-facing side. Only the sail's PBR material has nonzero transmission. In the PBR shader we add a diffuse contribution proportional to `albedo × incoming radiance × transmission × max(0, dot(-N, L))`, including the sun's and the B2 spotlight's shadow visibility. The spotlight term is evaluated even when ordinary front-face lighting is zero, which is essential for backlighting. This retains A3 blend shapes, depth testing and normal shadow casting, and is substantially cheaper than refraction or subsurface scattering. It is an artistic thin-sheet model, not a fully physical cloth BRDF [29]. Toggles: `sailTranslucency`, `sailTransmission`.
+
+
+| Transmission off | Transmission on |
+|:---:|:---:|
+| ![Transmission off](<screenshots/extra_sail_opaque.png>) | ![Transmission on](<screenshots/extra_sail_translucent.png>) |
+
+*Figure 14. Backlit sailcloth without and with the thin-surface transmission term. The sail becomes brighter while retaining opaque depth and shadow behaviour.*
+
+#### Cascaded directional shadows
+
+One tight sun-shadow map gives the boat good resolution but cannot cover the distant island well. We added a second directional depth map and divided the perspective camera frustum into overlapping near (0.2–67 m) and far (43–370 m) regions, blending shadow visibility across the overlap. Each slice is fitted to an orthographic light projection, with light-space texel snapping to reduce shimmering. The orthographic top camera instead uses a boat-centred close map and a course-centred wide map, since a perspective-depth split would not suit it. This improves the resolution-versus-coverage trade-off, but adds an entire shadow pass, a second depth texture and possible transition artefacts; it is a basic two-cascade implementation rather than a full production CSM system [30]. Toggle: `cascadedShadows`.
+
+
+| Single shadow map | Two cascades |
+|:---:|:---:|
+| ![Single shadow map](<screenshots/extra_shadow_single.png>) | ![Two cascades](<screenshots/extra_shadow_cascades.png>) |
+
+*Figure 15. Single directional map versus the near/far cascaded maps. The differences are subtle in this view; the main benefit is balancing close-up shadow detail with distant course coverage.*
+
+#### Screen-space ambient occlusion
+
+We added an opaque-geometry depth/normal prepass, followed by half-resolution SSAO with 16 hemisphere samples around each reconstructed view-space position. A depth-aware 5×5 blur smooths the grayscale occlusion buffer. The PBR shader applies the result only to ambient/indirect lighting, leaving sunlight, the lighthouse, transmission, water and particles unoccluded by this pass. This gives an inexpensive approximation of contact shading compared with global illumination, but it is view-dependent, can miss hidden surfaces and is the most expensive new screen-space pass. Our screenshots also show strong sail darkening, which is a limitation to inspect rather than evidence of accurate global illumination [31]. Toggles: `ssao`, `ssaoRadius`, `ssaoStrength`, `showSsao`.
+
+
+| SSAO off | SSAO on |
+|:---:|:---:|
+| ![SSAO off](<screenshots/extra_ssao_off.png>) | ![SSAO on](<screenshots/extra_ssao_on.png>) |
+
+*Figure 16. Screen-space ambient occlusion disabled and enabled. The enabled capture substantially darkens the sail and nearby geometry; this strong response should be evaluated for over-occlusion rather than assumed to be physically correct.*
+
+![SSAO debug mask](<screenshots/extra_ssao_mask.png>)
+
+*Figure 16a. The SSAO debug view displays the ambient-visibility mask directly, allowing inspection of excessive darkening and screen-space artefacts.*
 
 ## References
 
@@ -168,3 +262,16 @@ We added foam to the Gerstner ocean by measuring compression in the wave's horiz
 15. D. Baraff, "Physically Based Modeling: Rigid Body Simulation", SIGGRAPH course notes, 2001.
 
 ### Track B references
+
+20. K. Narkowicz, [*ACES Filmic Tone Mapping Curve*](https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/), 2016 (filmic tone-mapping approximation).
+21. LearnOpenGL, [*Shadow Mapping*](https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping) (depth maps, bias and PCF).
+22. LearnOpenGL, [*Light Casters*](https://learnopengl.com/Lighting/Light-casters) (spotlight cone and attenuation).
+23. LearnOpenGL, [*Framebuffers*](https://learnopengl.com/Advanced-OpenGL/Framebuffers) (off-screen render targets used by the minimap).
+24. GLM, `glm::lookAt` and `glm::ortho` APIs (the version of GLM bundled with the project; orthographic minimap camera).
+25. Dear ImGui, `ImGui::Image` API in `imgui.h` (the version bundled with the project; displaying the minimap texture).
+26. J. Tessendorf, *Simulating Ocean Water*, SIGGRAPH course notes, 2001 (ocean-simulation background; we did not implement an FFT ocean).
+27. M. Finch, [*Effective Water Simulation from Physical Models*](https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models), *GPU Gems*, ch. 1, 2004 (Gerstner water context).
+28. K. Mitchell, [*Volumetric Light Scattering as a Post-Process*](https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-13-volumetric-light-scattering-post-process), *GPU Gems 3*, ch. 13, 2007 (background on volumetric light shafts; our beam uses simpler translucent cone geometry).
+29. B. Karis, [*Real Shading in Unreal Engine 4*](https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf), SIGGRAPH course notes, 2013 (physically based shading background, not a direct cloth-transmission model).
+30. M. Valient, *Stable Rendering of Cascaded Shadow Maps*, *ShaderX6*, 2008 (stable cascade principles and reduced shadow shimmer; our implementation uses a simplified two-cascade fit).
+31. J. Chapman, [*SSAO Tutorial*](https://john-chapman-graphics.blogspot.com/2013/01/ssao-tutorial.html), posted January 2013 (view-space depth sampling and hemisphere SSAO).
