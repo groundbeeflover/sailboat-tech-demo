@@ -6,6 +6,7 @@ DISABLE_WARNINGS_PUSH()
 #include <glm/geometric.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec2.hpp>
 DISABLE_WARNINGS_POP()
 #include <algorithm>
 #include <cmath>
@@ -241,3 +242,31 @@ MaterialImages generateTerrain(const TerrainSamples& terrain, int size)
     out.normal = normalsFromHeight(bumps, size, size, static_cast<float>(size) / terrain.size);
     return out;
 }
+
+
+ImageRGBA generateSprayPuff(int size)
+{
+    // Opacity falls off towards the rim of the disc, and fBm makes the outline lumpy and leaves thin
+    // spots inside, so it reads as a cloud of droplets instead of a smooth ball. RGB stays white
+    // everywhere, so the mipmaps never mix in dark texels at the rim.
+    ImageRGBA img = makeImage(size, size);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(size);
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
+            const float r = 2.0f * glm::length(glm::vec2(u - 0.5f, v - 0.5f)); // 0 at the centre, 1 at the edge of the disc
+            const float outline = fbm(u * 4.0f, v * 4.0f, 4, 4, 3, 601);
+            const float droplets = fbm(u * 8.0f, v * 8.0f, 8, 8, 3, 602);
+            const float shape = 1.0f - glm::smoothstep(0.25f, 0.95f, r * (0.8f + 0.4f * outline));
+            const float alpha = shape * glm::mix(0.45f, 1.0f, glm::smoothstep(0.35f, 0.65f, droplets));
+
+            const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)) * 4;
+            img.pixels[i + 0] = 255;
+            img.pixels[i + 1] = 255;
+            img.pixels[i + 2] = 255;
+            img.pixels[i + 3] = toByte(alpha);
+        }
+    }
+    return img;
+}
+

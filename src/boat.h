@@ -28,7 +28,8 @@ class Waves;
 //      │  ├─ Boom (anim: swings to leeward, rate-limited so tacks/gybes are visible)
 //      │  │  └─ Sail (anim: non-uniform scale = billow depth and side)
 //      │  └─ WindVane (anim: points into the wind)
-//      └─ DeckCamera (no mesh; the deck viewpoint)
+//      ├─ DeckCamera (no mesh; the deck viewpoint)
+//      └─ Bow, Stern (no mesh; where the spray and the wake start)
 //
 // The constructor needs an OpenGL context (it uploads meshes and textures); update() is pure math.
 class Boat {
@@ -41,6 +42,10 @@ public:
     glm::vec3 coursePosition() const { return m_position; } // on the course, y = 0
     float yaw() const { return m_yaw; }
     const glm::mat4& deckCameraWorld() const { return m_deckCamera->world; }
+    // Spray emitters: the stem and the transom on the waterline (axes: +x port, +y up, +z forward).
+    const glm::mat4& bowWorld() const { return m_bow->world; }
+    const glm::mat4& sternWorld() const { return m_stern->world; }
+
 
     // Values shown in the UI (and handy for report screenshots).
     struct Telemetry {
@@ -70,6 +75,9 @@ private:
     SceneNode* m_sail { nullptr };
     SceneNode* m_vane { nullptr };
     SceneNode* m_deckCamera { nullptr };
+    SceneNode* m_bow { nullptr };
+    SceneNode* m_stern { nullptr };
+
 
     // Motion state
     bool m_initialised { false };

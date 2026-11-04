@@ -7,6 +7,7 @@
 #include "sky.h"
 #include "water.h"
 #include "waves.h"
+#include "particles.h"
 // Always include window first (because it includes glfw, which includes GL which needs to be included AFTER glew).
 // Can't wait for modules to fix this stuff...
 #include <framework/disable_all_warnings.h>
@@ -61,7 +62,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadows", &t.shadows }, { "showShadowMap", &t.showShadowMap }, { "dayNightCycle", &t.dayNightCycle },
 
         // Track A toggles:
-        { "island", &t.island },
+        { "island", &t.island }, { "particles", &t.particles },
+
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
@@ -73,7 +75,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadowExtent", &t.shadowExtent }, { "timeOfDay", &t.timeOfDay }, { "exposure", &t.exposure },
 
         // Track A parameters:
-        { "lighthouseSpeed", &t.lighthouseSpeed },
+        { "lighthouseSpeed", &t.lighthouseSpeed }, { "particleRate", &t.particleRate },
+
 
         // Track B parameters:
         { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
@@ -187,9 +190,12 @@ public:
             m_course.appendLines(lists.lines, m_toggles, m_waves, m_time);
             if (m_toggles.camera == CameraMode::Top) // the boat is only a few pixels on the map, so mark it
                 lists.lines.push_back({ .points = { m_boat.coursePosition() + glm::vec3(0.0f, 2.0f, 0.0f) }, .mode = LineMode::Points, .color = glm::vec3(3.0f, 0.2f, 0.1f), .pointSize = 14.0f });
-            // ---- Track A: add your scene content here, e.g.
-            //      lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
+
+            // ---- Track A: add your scene content here
             m_island.root().collect(lists.opaque);
+            if (m_toggles.particles)
+                lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
+
 
             m_renderer.render(frame, lists, m_water, m_waves, m_sky, m_toggles);
 
@@ -221,6 +227,10 @@ private:
 
         // ---- Track A systems update here (island, particles, flag, ...) ----
         m_island.update(dt, m_toggles, m_lighting);
+        // After m_boat.update(), so the Bow and Stern nodes already hold this frame's world matrices.
+        const SprayEmitters emitters { .bow = m_boat.bowWorld(), .stern = m_boat.sternWorld(), .boatSpeed = m_boat.telemetry().speed };
+        m_particles.update(dt, m_time, m_toggles, emitters, m_waves);
+
 
         // ---- Track B per-frame updates here (if any) ----
     }
@@ -243,6 +253,7 @@ private:
 
         // ---- Track A feature panels (one call per feature) ----
         islandUi();
+        particlesUi();
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
@@ -356,6 +367,16 @@ private:
             ImGui::Text("course clearance %.0f m%s", static_cast<double>(clearance), clearance < 0.0f ? " (crosses the island!)" : "");
         }
     }
+    void particlesUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Spray and wake")) {
+            ImGui::Checkbox("Spray and wake particles", &t.particles);
+            ImGui::SliderFloat("Spray rate (1/s)", &t.particleRate, 0.0f, 2000.0f, "%.0f");
+            ImGui::Text("%d / %d particles alive", static_cast<int>(m_particles.count()), static_cast<int>(ParticleSystem::MaxParticles));
+        }
+    }
+
 
     // ---- Track B feature panel methods ----
     void bloomUi()
@@ -438,6 +459,8 @@ private:
 
     // ---- Track A members (Island, ParticleSystem, ...) ----
     Island m_island { m_course.center() }; // declared after m_course, so the centre is already known
+    ParticleSystem m_particles;
+
 
     // ---- Track B members (if any) ----
 
