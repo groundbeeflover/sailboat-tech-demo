@@ -62,6 +62,8 @@ struct FeatureToggles {
     float lighthouseSpeed { 0.6f }; // lamp rotation, rad/s (about 10 s per turn)
     bool particles { true }; // bow spray and foam wake
     float particleRate { 800.0f }; // spray particles per second at the default speed, before the wave-impact boost
+    bool sailShapeOverride { false }; // set the sail's fullness by hand instead of from the wind
+    float sailShapeWeight { 1.0f }; // fullness when set by hand: 0 = flat, 1 = full (the side still follows the boom)
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
     bool bloom { true };

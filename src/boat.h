@@ -26,7 +26,7 @@ class Waves;
 //      │  └─ Tiller
 //      ├─ Mast
 //      │  ├─ Boom (anim: swings to leeward, rate-limited so tacks/gybes are visible)
-//      │  │  └─ Sail (anim: non-uniform scale = billow depth and side)
+//      │  │  └─ Sail (blend shape flat -> full; weight = billow depth, sign = side)
 //      │  └─ WindVane (anim: points into the wind)
 //      ├─ DeckCamera (no mesh; the deck viewpoint)
 //      └─ Bow, Stern (no mesh; where the spray and the wake start)
@@ -56,6 +56,7 @@ public:
         float boomDeg { 0.0f };
         float heelDeg { 0.0f };
         float rudderDeg { 0.0f };
+        float sailWeight { 0.0f }; // blend-shape weight of the sail: 0 = flat, +-1 = full to boom-local +-x
     };
     const Telemetry& telemetry() const { return m_telemetry; }
 

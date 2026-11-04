@@ -37,9 +37,11 @@ Mesh makeCylinderBetween(const glm::vec3& a, const glm::vec3& b, float radius, i
 Mesh makeSphere(float radius, int segments = 24, int rings = 12);
 
 // Triangular mainsail: luff along +y (on the mast), foot along -z (on the boom).
-// It bulges along +x with a camber of `camber` times the local chord; the boat scales it in x to
-// flip and size the billow, so this is the "full sail" on the +x side.
-Mesh makeSail(float foot, float luff, float camber = 0.1f, int resolution = 20);
+// It bulges along +x with a camber of `camber` times the local chord, and each horizontal section is
+// turned about the luff, from 0 at the foot to `twistDeg` at the head, so the leech swings out to the
+// same side (the top of a real sail falls off to leeward). The vertices and triangles depend only on
+// foot, luff and resolution, so a flat sail and a full one can be the base and target of a blend shape.
+Mesh makeSail(float foot, float luff, float camber = 0.1f, float twistDeg = 0.0f, int resolution = 20);
 
 // Helpers
 void transformMesh(Mesh& mesh, const glm::mat4& transform);

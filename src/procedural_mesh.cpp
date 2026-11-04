@@ -280,7 +280,7 @@ Mesh makeSphere(float radius, int segments, int rings)
     return mesh;
 }
 
-Mesh makeSail(float foot, float luff, float camber, int resolution)
+Mesh makeSail(float foot, float luff, float camber, float twistDeg, int resolution)
 {
     Mesh mesh = newMesh();
     addGrid(
@@ -292,7 +292,12 @@ Mesh makeSail(float foot, float luff, float camber, int resolution)
             // Chord-wise camber profile with its deepest point at about 40% of the chord (like a real sail).
             const float profile = 0.5f * (4.0f * s * (1.0f - s)) + 0.5f * (6.75f * s * (1.0f - s) * (1.0f - s));
             const glm::vec3 p(camber * chord * profile, t * luff, -s * chord);
-            return makeVertex(p, glm::vec3(0.0f), glm::vec2(s, t));
+            // Twist: rotate the section about the luff (the y axis), more towards the head. The leech
+            // has z < 0, so it swings out to +x, the side of the bulge.
+            const float twist = glm::radians(twistDeg) * t;
+            const glm::vec3 twisted(p.x * std::cos(twist) - p.z * std::sin(twist), p.y, p.x * std::sin(twist) + p.z * std::cos(twist));
+            return makeVertex(twisted, glm::vec3(0.0f), glm::vec2(s, t));
+
         },
         true);
     computeSmoothNormals(mesh);

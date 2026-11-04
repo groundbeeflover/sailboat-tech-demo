@@ -62,8 +62,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadows", &t.shadows }, { "showShadowMap", &t.showShadowMap }, { "dayNightCycle", &t.dayNightCycle },
 
         // Track A toggles:
-        { "island", &t.island }, { "particles", &t.particles },
-
+        { "island", &t.island }, { "particles", &t.particles }, { "sailShapeOverride", &t.sailShapeOverride },
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
@@ -76,7 +75,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadowExtent", &t.shadowExtent }, { "timeOfDay", &t.timeOfDay }, { "exposure", &t.exposure },
 
         // Track A parameters:
-        { "lighthouseSpeed", &t.lighthouseSpeed }, { "particleRate", &t.particleRate },
+        { "lighthouseSpeed", &t.lighthouseSpeed }, { "particleRate", &t.particleRate }, { "sailShapeWeight", &t.sailShapeWeight },
 
 
         // Track B parameters:
@@ -256,6 +255,7 @@ private:
         // ---- Track A feature panels (one call per feature) ----
         islandUi();
         particlesUi();
+        sailUi();
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
@@ -370,6 +370,7 @@ private:
             ImGui::Text("course clearance %.0f m%s", static_cast<double>(clearance), clearance < 0.0f ? " (crosses the island!)" : "");
         }
     }
+    
     void particlesUi()
     {
         FeatureToggles& t = m_toggles;
@@ -379,6 +380,17 @@ private:
             ImGui::Text("%d / %d particles alive", static_cast<int>(m_particles.count()), static_cast<int>(ParticleSystem::MaxParticles));
         }
     }
+
+    void sailUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Sail blend shapes")) {
+            ImGui::Checkbox("Set fullness by hand", &t.sailShapeOverride);
+            ImGui::SliderFloat("Fullness", &t.sailShapeWeight, 0.0f, 1.0f);
+            ImGui::Text("blend weight %.2f (0 = flat, sign = side)", static_cast<double>(m_boat.telemetry().sailWeight));
+        }
+    }
+
 
 
     // ---- Track B feature panel methods ----
