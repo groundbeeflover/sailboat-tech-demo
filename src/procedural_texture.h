@@ -31,6 +31,10 @@ MaterialImages generateHullStrakes(int width = 1024, int height = 512);
 // Tileable small-scale ripple normals for the water surface.
 ImageRGBA generateWaterNormals(int size = 256);
 
+// A soft, lumpy puff for spray and foam particles. The shape is in alpha; RGB is white, the shader lights it.
+ImageRGBA generateSprayPuff(int size = 64);
+
+
 // A terrain height field sampled on a square grid: the input of generateTerrain().
 struct TerrainSamples {
     int resolution { 0 }; // samples per side; sample (i, j) sits at u = i / (resolution - 1), v = j / (resolution - 1)

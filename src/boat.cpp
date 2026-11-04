@@ -150,6 +150,12 @@ Boat::Boat()
     const float cameraY = m_shape.sheer(m_shape.uAt(DeckCameraZ)) + 2.0f;
     m_deckCamera = &hull.addChild("DeckCamera", nullptr, nullptr,
         translate(glm::vec3(0.5f, cameraY, DeckCameraZ)) * rotateY(glm::pi<float>()) * rotateX(glm::radians(-7.0f)));
+    // Spray emitters (no mesh), just above the waterline: the stem, and the middle of the transom.
+    // The particle system reads their world matrices, so the spray follows heave, pitch, roll and heel.
+    m_bow = &hull.addChild("Bow", nullptr, nullptr, translate(glm::vec3(0.0f, 0.05f, m_shape.z(1.0f) - 0.1f)));
+    m_stern = &hull.addChild("Stern", nullptr, nullptr, translate(glm::vec3(0.0f, 0.05f, sternZ)));
+
+
 }
 
 void Boat::update(float dt, float time, const FeatureToggles& toggles, const BezierPath& course, const Waves& waves)

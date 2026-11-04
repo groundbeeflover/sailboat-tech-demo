@@ -60,6 +60,8 @@ struct FeatureToggles {
     // ---- Track A features (island, particles, sail blend shapes, flag, free sailing) ----
     bool island { true };
     float lighthouseSpeed { 0.6f }; // lamp rotation, rad/s (about 10 s per turn)
+    bool particles { true }; // bow spray and foam wake
+    float particleRate { 800.0f }; // spray particles per second at the default speed, before the wave-impact boost
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
     bool bloom { true };
