@@ -27,6 +27,13 @@ public:
     // Smallest horizontal distance from a point to the path or the edge of a buoy, e.g. to check
     // that something placed inside the loop stays clear of the course.
     float distanceTo(const glm::vec3& point) const;
+    // Free sailing (A5): the buoys are obstacles the boat can hit.
+    static constexpr float BuoyRadius = 0.7f; // widest point of the float
+    const std::vector<glm::vec3>& buoyPositions() const { return m_buoyPositions; } // centres, y = 0
+    // The boat ran into buoy `buoy`, pushing it along `direction` (world xz) at `speed` m/s: it tips
+    // away and rocks back over the next seconds (see update()).
+    void knock(size_t buoy, const glm::vec2& direction, float speed, float time);
+
 
     void appendLines(std::vector<LineBatch>& out, const FeatureToggles& toggles, const Waves& waves, float time) const;
 
@@ -42,4 +49,12 @@ private:
     std::unique_ptr<SceneNode> m_root;
     std::vector<SceneNode*> m_buoys;
     std::vector<glm::vec3> m_buoyPositions;
+    // The last hit of each buoy, for the rocking in update().
+    struct Knock {
+        float time { 0.0f }; // when it was hit
+        glm::vec2 direction { 1.0f, 0.0f }; // world xz, the way it was pushed
+        float amplitude { 0.0f }; // radians; 0 = never hit
+    };
+    std::vector<Knock> m_knocks;
+
 };

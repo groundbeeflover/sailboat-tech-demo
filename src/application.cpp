@@ -65,7 +65,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
 
         // Track A toggles:
         { "island", &t.island }, { "particles", &t.particles }, { "sailShapeOverride", &t.sailShapeOverride }, 
-        { "flag", &t.flag }, { "flagFreeze", &t.flagFreeze },
+        { "flag", &t.flag }, { "flagFreeze", &t.flagFreeze }, { "freeSailing", &t.freeSailing },
+
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
@@ -244,10 +245,31 @@ private:
         m_waves.update(dt, glm::radians(m_toggles.windFromDeg), m_toggles.windStrength, m_toggles.waveCount, m_toggles.waveScale, m_toggles.waves);
         m_course.setTension(m_toggles.courseTension);
         m_course.update(m_time, m_waves);
-        m_boat.update(dt, m_time, m_toggles, m_course.path(), m_waves);
+        float steer = 0.0f;
+        if (m_toggles.freeSailing && !ImGui::GetIO().WantCaptureKeyboard) {
+            if (m_window.isKeyPressed(GLFW_KEY_A) || m_window.isKeyPressed(GLFW_KEY_LEFT))
+                steer -= 1.0f;
+            if (m_window.isKeyPressed(GLFW_KEY_D) || m_window.isKeyPressed(GLFW_KEY_RIGHT))
+                steer += 1.0f;
+        }
+        m_obstacles.clear();
+        for (const glm::vec3& buoy : m_course.buoyPositions())
+            m_obstacles.push_back({ .center = glm::vec2(buoy.x, buoy.z), .radius = Course::BuoyRadius });
+        if (m_toggles.island) // all the dry land lies inside this circle
+            m_obstacles.push_back({ .center = glm::vec2(m_island.position().x, m_island.position().z), .radius = m_island.shoreRadius() });
+        m_boat.update(dt, m_time, m_toggles, m_course.path(), m_waves, { .steer = steer, .obstacles = m_obstacles });
 
         // ---- Track A systems update here (island, particles, flag, ...) ----
         m_island.update(dt, m_toggles, m_lighting);
+                // A5: a buoy that was hit rocks, and spray flies up where the hull struck it. The island is the
+        // last obstacle; it only stops the boat.
+        if (const Boat::Contact& hit = m_boat.contact(); hit.hit && hit.obstacle < m_course.buoyPositions().size()) {
+            m_course.knock(hit.obstacle, -hit.normal, hit.speed, m_time);
+            m_particles.burst(hit.point, hit.normal, hit.speed);
+            ++m_buoyHits;
+            m_lastHitSpeed = hit.speed;
+        }
+
         // After m_boat.update(), so the Bow and Stern nodes already hold this frame's world matrices.
         const SprayEmitters emitters { .bow = m_boat.bowWorld(), .stern = m_boat.sternWorld(), .boatSpeed = m_boat.telemetry().speed };
         m_particles.update(dt, m_time, m_toggles, emitters, m_waves);
@@ -280,6 +302,7 @@ private:
         particlesUi();
         sailUi();
         flagUi();
+        freeSailingUi();
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
@@ -435,7 +458,15 @@ private:
         }
     }
 
-
+    void freeSailingUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Free sailing and collisions")) {
+            ImGui::Checkbox("Free sailing (F)", &t.freeSailing);
+            ImGui::TextDisabled("A / D or arrow keys steer; point into the wind to stop.");
+            ImGui::Text("rudder %.0f deg   buoy hits %d (last at %.1f m/s)", static_cast<double>(m_boat.telemetry().rudderDeg), m_buoyHits, static_cast<double>(m_lastHitSpeed));
+        }
+    }
 
     // ---- Track B feature panel methods ----
     void bloomUi()
@@ -508,6 +539,9 @@ private:
         case GLFW_KEY_SPACE:
             m_toggles.pauseBoat = !m_toggles.pauseBoat;
             break;
+        case GLFW_KEY_F:
+            m_toggles.freeSailing = !m_toggles.freeSailing;
+            break;
         case GLFW_KEY_P:
             m_screenshotRequested = true;
             break;
@@ -559,6 +593,10 @@ private:
     // ---- Track A members (Island, ParticleSystem, ...) ----
     Island m_island { m_course.center() }; // declared after m_course, so the centre is already known
     ParticleSystem m_particles;
+    std::vector<Boat::Obstacle> m_obstacles; // rebuilt every frame for free sailing (A5)
+    int m_buoyHits { 0 };
+    float m_lastHitSpeed { 0.0f };
+
     Flag m_flag;
 
 

@@ -11,9 +11,7 @@ DISABLE_WARNINGS_POP()
 #include <cmath>
 #include <limits>
 
-namespace {
-constexpr float BuoyRadius = 0.7f; // widest point of the float
-}
+
 
 Course::Course()
 {
@@ -45,6 +43,7 @@ Course::Course()
         m_buoyPositions.push_back(anchor + glm::normalize(m_center - anchor) * 9.0f);
         m_buoys.push_back(&m_root->addChild("Buoy", m_buoyMesh.get(), &m_buoyMaterial));
     }
+    m_knocks.resize(m_buoys.size());
     setTension(1.0f);
 }
 
@@ -76,12 +75,32 @@ void Course::update(float time, const Waves& waves)
         const glm::vec3 n = waves.normal(xz, time);
         const float tiltX = std::atan2(n.z, n.y);
         const float tiltZ = -std::atan2(n.x, n.y);
-        m_buoys[i]->anim = glm::translate(glm::mat4(1.0f), glm::vec3(xz.x, height, xz.y))
+        // Hit by the boat (A5): tip away from it and rock back. This is the impulse response of a
+        // damped spring, theta(t) = A e^(-t / tau) sin(omega t), evaluated in closed form, so it looks
+        // the same at any frame rate. It turns about the horizontal axis at right angles to the push.
+        glm::mat4 rocking(1.0f);
+        const Knock& k = m_knocks[i];
+        const float sinceHit = time - k.time;
+        if (k.amplitude > 0.0f && sinceHit >= 0.0f) {
+            const float rock = k.amplitude * std::exp(-sinceHit / 1.2f) * std::sin(4.2f * sinceHit);
+            rocking = glm::rotate(glm::mat4(1.0f), rock, glm::vec3(k.direction.y, 0.0f, -k.direction.x));
+        }
+        m_buoys[i]->anim = glm::translate(glm::mat4(1.0f), glm::vec3(xz.x, height, xz.y)) * rocking
             * glm::rotate(glm::mat4(1.0f), tiltZ, glm::vec3(0, 0, 1))
             * glm::rotate(glm::mat4(1.0f), tiltX, glm::vec3(1, 0, 0));
     }
     m_root->updateWorld();
 }
+
+void Course::knock(size_t buoy, const glm::vec2& direction, float speed, float time)
+{
+    if (buoy >= m_knocks.size() || glm::length(direction) < 1e-4f)
+        return;
+    // A harder hit tips it further, up to about 30 degrees.
+    m_knocks[buoy] = { .time = time, .direction = glm::normalize(direction), .amplitude = std::min(0.15f * speed, 0.5f) };
+}
+
+
 
 void Course::appendLines(std::vector<LineBatch>& out, const FeatureToggles& toggles, const Waves& waves, float time) const
 {

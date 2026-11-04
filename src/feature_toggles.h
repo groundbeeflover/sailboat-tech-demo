@@ -68,6 +68,7 @@ struct FeatureToggles {
     float flagFps { 12.0f }; // flipbook frames per second in a full wind (a quarter of it in a calm)
     bool flagFreeze { false }; // hold one frame (report screenshots)
     int flagFrame { 0 }; // the frame held while frozen, 0..15
+    bool freeSailing { false }; // steer by hand (A/D or arrow keys) instead of following the course
 
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
