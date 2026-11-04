@@ -270,3 +270,77 @@ ImageRGBA generateSprayPuff(int size)
     return img;
 }
 
+
+namespace {
+
+// Colour (sRGB) of a flag design at (u, v): u runs along the fly from the staff (0) to the free end (1),
+// v from the bottom (0) to the top (1). Values a little outside [0, 1] just extend the design.
+glm::vec3 flagColour(FlagDesign design, float u, float v)
+{
+    switch (design) {
+    case FlagDesign::Hungary:
+        return v > 2.0f / 3.0f ? glm::vec3(0.80f, 0.16f, 0.24f) : (v > 1.0f / 3.0f ? glm::vec3(0.95f, 0.95f, 0.93f) : glm::vec3(0.26f, 0.44f, 0.30f));
+    case FlagDesign::SouthAfrica: {
+        // In flag units (3 x 2, hoist at x = 0, bottom at y = 0). The green Y lies on its side: two arms
+        // from the hoist corners meet at (1, 1) and run on as one band to the fly. The green is 2/5 wide
+        // and its borders 2/15: white towards the red (top) and blue (bottom) fields, gold towards the
+        // black triangle at the hoist. A simplified construction of the official flag.
+        const glm::vec2 p(3.0f * u, 2.0f * v);
+        const glm::vec2 junction(1.0f, 1.0f);
+        auto distanceToArm = [&](const glm::vec2& corner) {
+            const glm::vec2 arm = junction - corner;
+            const float t = std::clamp(glm::dot(p - corner, arm) / glm::dot(arm, arm), 0.0f, 1.0f);
+            return glm::length(p - (corner + t * arm));
+        };
+        const float toBand = p.x >= junction.x ? std::abs(p.y - junction.y) : 1e9f; // the arm from the junction to the fly
+        const float d = std::min({ distanceToArm(glm::vec2(0.0f, 0.0f)), distanceToArm(glm::vec2(0.0f, 2.0f)), toBand });
+        constexpr float greenHalfWidth = 0.2f, border = 2.0f / 15.0f;
+        if (d <= greenHalfWidth)
+            return glm::vec3(0.0f, 0.47f, 0.29f); // green
+        if (p.x < junction.x - std::abs(p.y - junction.y)) // inside the V, towards the hoist
+            return d <= greenHalfWidth + border ? glm::vec3(1.0f, 0.72f, 0.11f) : glm::vec3(0.02f); // gold, black
+        if (d <= greenHalfWidth + border)
+            return glm::vec3(0.95f, 0.95f, 0.93f); // white
+        return p.y > junction.y ? glm::vec3(0.88f, 0.24f, 0.19f) : glm::vec3(0.0f, 0.08f, 0.54f); // red, blue
+    }
+    }
+    return glm::vec3(1.0f);
+}
+
+}
+
+ImageRGBA generateFlagAtlas(FlagDesign design, int columns, int rows, int cellWidth, int cellHeight, int gutter)
+{
+    // Frame f shows a ripple travelling from the staff (u = 0) to the free end (u = 1) at phase
+    // 2 pi f / frames, so the frame after the last one equals the first and the loop is seamless. The
+    // ripple bends the design, and lights the cloth by its slope (cos, the derivative of the sin
+    // that bends it): bright where the cloth turns up to the light, dark where it turns away. Both grow
+    // towards the free end, because the staff holds the hoist still. Each texel averages 2 x 2
+    // samples, so stripe borders and the diagonal arms of the South African Y don't stair-step.
+    ImageRGBA img = makeImage(columns * cellWidth, rows * cellHeight);
+    const int frames = columns * rows;
+    for (int f = 0; f < frames; ++f) {
+        const float phase = glm::two_pi<float>() * static_cast<float>(f) / static_cast<float>(frames);
+        const int x0 = (f % columns) * cellWidth;
+        const int y0 = (f / columns) * cellHeight;
+        for (int y = 0; y < cellHeight; ++y) {
+            for (int x = 0; x < cellWidth; ++x) {
+                glm::vec3 sum(0.0f);
+                for (int s = 0; s < 4; ++s) {
+                    const float sx = 0.25f + 0.5f * static_cast<float>(s % 2);
+                    const float sy = 0.25f + 0.5f * static_cast<float>(s / 2);
+                    // Position on the cloth; the gutter texels clamp to the edge of the picture.
+                    const float u = std::clamp((static_cast<float>(x - gutter) + sx) / static_cast<float>(cellWidth - 2 * gutter), 0.0f, 1.0f);
+                    const float v = std::clamp((static_cast<float>(y - gutter) + sy) / static_cast<float>(cellHeight - 2 * gutter), 0.0f, 1.0f);
+                    const float angle = glm::two_pi<float>() * 2.0f * u - phase; // two ripples along the fly
+                    const float reach = 0.25f + 0.75f * u;
+                    sum += flagColour(design, u, v + 0.05f * reach * std::sin(angle)) * (0.82f + 0.18f * reach * std::cos(angle));
+                }
+                setPixel(img, x0 + x, y0 + y, 0.25f * sum);
+            }
+        }
+    }
+    return img;
+}
+
+
