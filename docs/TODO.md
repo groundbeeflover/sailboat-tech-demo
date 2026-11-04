@@ -14,7 +14,7 @@ All 7 minimal requirements are done. Everything below is extras, polish and hand
 | | Track A: world and simulation | Track B: render pipeline |
 |---|---|---|
 | Mindset | New things in the scene, CPU logic, their own meshes/shaders | New passes, post-processing, lighting models |
-| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom, B2 Spotlight + second shadow map, B3 Minimap, B4 Crest foam (B0 interface: **done**) |
+| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom (**done**), B2 Spotlight + second shadow map (**implemented; visual review pending**), B3 Minimap, B4 Crest foam (B0 interface: **done**) |
 | Owns files | `island.*`, `particles.*`, `flag.*`, `boat.*`, `course.*`, `procedural_*`, `waves.*`, `particle_*.glsl`, `terrain_*.glsl` | `renderer.*`, `bloom.*`, `minimap.*`, `lights.h`, `shadow_map.*`, `framebuffer.*`, `sky.*`, `pbr_*.glsl`, `water_*.glsl`, `post_frag.glsl`, `bloom_*.glsl` |
 | Rough hours | ≈ 12–14 | ≈ 11–13 |
 
@@ -130,7 +130,7 @@ The rendered output is byte-identical to before B0 (checked with captures).
 
 ### B1. Bloom (~2.5 h)
 
-**Implementation:** done (2026-11-04). See [Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md) for exact changes, algorithms and test results. Full-scene screenshots and end-to-end build still pending.
+**Implementation:** done (2026-11-04). User confirmed A1+B1 work together on their workstation. See [Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md) for exact changes, algorithms and test results; report screenshots are still to be collected.
 
 **Goal:** bright HDR parts (sun glints, sun disk, later the lighthouse lamp) bleed light into their
 surroundings. The scene is already rendered to an RGBA16F target, so values above 1 survive.
@@ -165,6 +165,13 @@ the choice (simpler, enough for our scene size).
 Avoid "everything glows": the sky must not exceed the threshold except the sun disk.
 
 ### B2. Spotlight with its own shadow map (~3.5 h): "shadows for multiple light sources"
+
+**Implementation:** B2 complete in the Track B branch (2026-11-04), awaiting the teammate's
+branch-level and merged-`main` visual checks. See
+[Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md#3-b2-lighthouse-spotlight-and-second-shadow-map)
+for exact design, synthetic OpenGL validation, report material and capture commands. A1's
+`frame.spot = m_island.lampLight()` is already merged; no placeholder lamp was needed.
+
 
 **Goal:** a second, shadow-casting light. Best visual: the **lighthouse beam** (A1) sweeping over the
 water at night, throwing the boat's shadow. Until A1 merges, use a placeholder: a lamp on a pole at

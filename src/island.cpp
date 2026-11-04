@@ -202,6 +202,9 @@ Island::Island(const glm::vec3& position)
     SceneNode& gallery = tower.addChild("Gallery", galleryMesh, &m_metalMaterial, translate(glm::vec3(0.0f, TowerHeight, 0.0f)));
     SceneNode& lampHouse = gallery.addChild("LampHouse", lanternMesh, &m_metalMaterial, translate(glm::vec3(0.0f, GalleryThickness, 0.0f)));
     m_lamp = &lampHouse.addChild("Lamp", lampMesh, &m_lampMaterial, translate(glm::vec3(0.0f, LampHeight, 0.0f)));
+    // The spotlight originates inside this solid box. If it is rendered into its own
+    // depth map, the front face blocks the entire narrow cone (even with depth bias).
+    m_lamp->castsSpotShadow = false;
 
     m_root->updateWorld();
     m_beamTilt = std::atan2(m_lamp->world[3].y, BeamReach);

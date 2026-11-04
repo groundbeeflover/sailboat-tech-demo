@@ -38,5 +38,6 @@ public:
     glm::mat4 world { 1.0f };
     float blendWeight { 0.0f }; // blend-shape weight passed to the shaders (see DrawItem)
     bool visible { true };
+    bool castsSpotShadow { true }; // lamp housing is not a blocker of its own spotlight
     std::vector<std::unique_ptr<SceneNode>> children;
 };

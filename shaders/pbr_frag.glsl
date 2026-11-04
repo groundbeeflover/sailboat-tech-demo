@@ -26,6 +26,19 @@ uniform sampler2DShadow shadowMap;
 uniform mat4 lightSpaceMatrix;
 uniform int pcfRadius;
 uniform float shadowBias;
+// Independent B2 lighthouse direct light: finite cone, inverse-square falloff, own shadow map.
+uniform bool useSpotlight;
+uniform vec3 spotPosition;
+uniform vec3 spotDirection;
+uniform vec3 spotColor;
+uniform float spotCosInner;
+uniform float spotCosOuter;
+uniform float spotRange;
+uniform bool useSpotShadows;
+uniform sampler2DShadow spotShadowMap;
+uniform mat4 spotLightSpaceMatrix;
+uniform float spotBias;
+
 
 // Material
 uniform vec3 albedoFactor;
@@ -117,6 +130,42 @@ float lightVisibility(vec3 worldPosition, float NdotL)
     return mix(lit, 1.0, smoothstep(0.85, 1.0, max(edge.x, edge.y)));
 }
 
+
+// Match this function in the water shader: geometric normal determines depth bias.
+float spotVisibility(vec3 worldPosition, float NdotL)
+{
+    if (!useSpotShadows)
+        return 1.0;
+    vec4 clip = spotLightSpaceMatrix * vec4(worldPosition, 1.0);
+    if (clip.w <= 0.0)
+        return 1.0;
+    vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
+    if (p.z <= 0.0 || p.z >= 1.0 || any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0))))
+        return 1.0;
+    float slope = clamp(sqrt(max(1.0 - NdotL * NdotL, 0.0)) / max(NdotL, 0.05), 0.0, 10.0);
+    float bias = spotBias * (1.0 + slope); // independent: perspective depth is non-linear
+    vec2 texel = 1.0 / vec2(textureSize(spotShadowMap, 0));
+    float lit = 0.0;
+    for (int x = -pcfRadius; x <= pcfRadius; ++x)
+        for (int y = -pcfRadius; y <= pcfRadius; ++y)
+            lit += texture(spotShadowMap, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
+    float side = float(2 * pcfRadius + 1);
+    return lit / (side * side);
+}
+
+// Return attenuation, and the fragment-to-lamp vector needed by the BRDF.
+float spotAttenuation(vec3 toLamp, out vec3 L)
+{
+    float r2 = dot(toLamp, toLamp);
+    float distance = sqrt(r2);
+    L = toLamp / max(distance, 1e-4);
+    if (distance < 1e-4 || distance >= spotRange)
+        return 0.0;
+    float cone = smoothstep(spotCosOuter, spotCosInner, dot(-L, spotDirection));
+    float fade = clamp(1.0 - pow(distance / spotRange, 4.0), 0.0, 1.0);
+    return cone * fade * fade / max(r2, 1.0);
+}
+
 vec3 applyFog(vec3 color)
 {
     float dist = orthographic ? 0.0 : length(cameraPosition - fragPosition);
@@ -132,6 +181,7 @@ void main()
     vec3 V = viewVector();
     if (doubleSided && dot(N, V) < 0.0)
         N = -N; // thin surfaces (sail): light the side we are looking at
+    vec3 geometricN = N;
     // Shadow lookup with the geometric normal: the bias must follow the real surface, not the normal map.
     float visibility = lightVisibility(fragPosition, abs(dot(N, normalize(lightDirection))));
 
@@ -185,6 +235,34 @@ void main()
         color = (diffuse + specular) * lightColor * visibility + albedo * ambientColor;
         if (useEnvironmentMap)
             color += mix(vec3(0.04), albedo, metallic) * textureLod(environmentMap, R, roughness * (environmentMaxLod - 1.0)).rgb;
+    }
+
+    // Same direct BRDF as the directional sun, but using the lamp's local direction and intensity.
+    // Only this direct contribution is shadowed: emission and environment light remain unaffected.
+    if (useSpotlight) {
+        vec3 SL;
+        float attenuation = spotAttenuation(spotPosition - fragPosition, SL);
+        float spotNdotL = max(dot(N, SL), 0.0);
+        if (attenuation > 0.0 && spotNdotL > 0.0) {
+            vec3 radiance = spotColor * attenuation * spotVisibility(fragPosition, abs(dot(geometricN, SL)));
+            vec3 SH = normalize(SL + V);
+            float spotNdotH = max(dot(N, SH), 0.0);
+            float spotVdotH = max(dot(V, SH), 0.0);
+            vec3 F0 = mix(vec3(0.04), albedo, metallic);
+            if (usePBR) {
+                vec3 F = fresnelSchlick(spotVdotH, F0);
+                float D = distributionGGX(spotNdotH, roughness * roughness);
+                float G = geometrySmith(NdotV, spotNdotL, roughness);
+                vec3 specular = D * G * F / (4.0 * NdotV * max(spotNdotL, 1e-4));
+                vec3 kD = (1.0 - F) * (1.0 - metallic);
+                color += (kD * albedo / PI + specular) * radiance * spotNdotL;
+            } else {
+                float shininess = 2.0 / max(pow(roughness, 4.0), 1e-4) - 2.0;
+                vec3 diffuse = albedo * (1.0 - metallic) * spotNdotL;
+                vec3 specular = F0 * pow(spotNdotH, shininess) * (shininess + 8.0) / (8.0 * PI) * spotNdotL;
+                color += (diffuse + specular) * radiance;
+            }
+        }
     }
 
     color += emissive;

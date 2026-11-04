@@ -4,3 +4,13 @@ cmake-build-*/
 .vscode/
 .idea/
 imgui.ini
+Debug/
+Release/
+x64/Debug/
+x64/Release/
+.vs/
+*.VC.db
+*.VC.opendb
+*.ipch
+*.suo
+*.user

@@ -36,3 +36,7 @@ private:
 // +-depthRange metres along it. Its centre is snapped to whole shadow-map texels, so shadow edges
 // do not crawl ("shimmer") while the boat moves.
 glm::mat4 directionalLightMatrix(const glm::vec3& lightDirection, const glm::vec3& center, float halfExtent, float depthRange, int resolution);
+
+struct SpotLight;
+// Unlike a directional light, a local cone uses a perspective view/projection.
+glm::mat4 spotLightMatrix(const SpotLight& spot, float nearPlane = 0.5f);

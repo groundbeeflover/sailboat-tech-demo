@@ -33,12 +33,12 @@ the sun and recolours the procedural sky that the water and the boat reflect.
 | 1 | Buoyancy: CPU evaluates the same Gerstner sum at 4 hull points → heave, pitch, roll (+ wind heel) | skeleton done | |
 | 2 | Day-night: sun path, sky colour, moonlight, stars | basic version done (slider + auto cycle) | |
 | 2 | Shadow map from the sun/moon: PCF, slope-scaled bias, texel snapping, edge fade, debug view | done (one light) | |
-| 2 | Second shadowed light (lighthouse spotlight, perspective shadow map) for "shadows for multiple lights" | todo | |
-| 2 | Bloom on the HDR target (sun glints, lighthouse lamp) | implemented (B1); scene screenshots pending | Track B |
+| 2 | Second shadowed light (lighthouse spotlight, perspective shadow map) for "shadows for multiple lights" | implemented (B2); merged-scene screenshot review pending | Track B |
+| 2 | Bloom on the HDR target (sun glints, lighthouse lamp) | implemented (B1); verified locally by user, screenshots pending | Track B |
 | 3 | Spray / wake particles at the bow, drifting with the wind | todo | |
 | 3 | Minimap: top camera into an FBO, shown with `ImGui::Image` | todo | |
 | 3 | Sail billow as blend shapes (flat ↔ full) instead of the current scale | todo | |
-| 3 | Island + lighthouse (procedural terrain, rotating lamp, spotlight) | done (the spotlight is drawn once B2 lands) | |
+| 3 | Island + lighthouse (procedural terrain, rotating lamp, spotlight) | done A1 (lampLight provides B2 input) | Track A |
 | 3 | Crest foam, flag with animated texture, free-steering mode | todo | |
 
 The report's first page needs a percentage per member **per feature**: fill in the Owner column

@@ -69,4 +69,10 @@ struct FeatureToggles {
     float bloomIntensity { 0.6f }; // added in linear HDR, before tone mapping
     int bloomIterations { 4 }; // horizontal + vertical Gaussian pass pairs, 1..6
     bool showBloomBuffer { false }; // inspect the blurred highlights in place of the scene
+
+    // B2: second direct light from A1's lighthouse, independently shadowed.
+    bool spotlight { true };
+    bool spotShadows { true };
+    float spotBias { 0.00008f }; // projected *perspective* depth (not the sun's linear depth)
+    bool showSpotShadowMap { false };
 };

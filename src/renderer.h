@@ -29,7 +29,7 @@ struct FrameContext {
 };
 
 // Owns the shaders and the render targets, and draws one frame:
-//   shadow map: depth of all meshes seen from the light
+//   two shadow maps: orthographic sun/moon + optional perspective lighthouse lamp
 //   HDR target: opaque PBR meshes -> water -> debug lines -> extra transparent passes -> skybox
 //   screen:     tone mapping + gamma, optional shadow-map view (ImGui is drawn on top afterwards by the Window)
 class Renderer {
@@ -52,6 +52,9 @@ public:
 private:
     void drawShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items, const FeatureToggles& toggles);
     void drawShadowMapDebugView(const FrameContext& frame);
+    void drawSpotShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items);
+    void drawSpotShadowMapDebugView(const FrameContext& frame);
+    void renderDepthItems(const glm::mat4& lightSpace, const std::vector<DrawItem>& items, bool spotlightPass = false);
     void setFrameUniforms(const FrameContext& frame, const Sky& sky, const FeatureToggles& toggles) const;
     void drawOpaque(const FrameContext& frame, const std::vector<DrawItem>& items, const Sky& sky, const FeatureToggles& toggles);
     void drawWater(const FrameContext& frame, Water& water, const Waves& waves, const Sky& sky, const FeatureToggles& toggles);
@@ -67,11 +70,14 @@ private:
     Shader m_postShader;
     Shader m_shadowShader;
     Shader m_depthDebugShader;
+    Shader m_spotDepthDebugShader;
 
     HdrTarget m_hdr;
     BloomPass m_bloom; // optional half-res HDR highlights, composited before ACES
     ShadowMap m_shadowMap;
+    ShadowMap m_spotShadowMap; // fixed 1024x1024 depth-only FBO
     glm::mat4 m_lightSpace { 1.0f };
+    glm::mat4 m_spotLightSpace { 1.0f };
     GLuint m_emptyVao { 0 };
     GLuint m_lineVao { 0 };
     GLuint m_lineVbo { 0 };
