@@ -14,7 +14,7 @@ All 7 minimal requirements are done. Everything below is extras, polish and hand
 | | Track A: world and simulation | Track B: render pipeline |
 |---|---|---|
 | Mindset | New things in the scene, CPU logic, their own meshes/shaders | New passes, post-processing, lighting models |
-| Features | A1 Island + lighthouse, A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom, B2 Spotlight + second shadow map, B3 Minimap, B4 Crest foam (B0 interface: **done**) |
+| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom, B2 Spotlight + second shadow map, B3 Minimap, B4 Crest foam (B0 interface: **done**) |
 | Owns files | `island.*`, `particles.*`, `flag.*`, `boat.*`, `course.*`, `procedural_*`, `waves.*`, `particle_*.glsl`, `terrain_*.glsl` | `renderer.*`, `bloom.*`, `minimap.*`, `lights.h`, `shadow_map.*`, `framebuffer.*`, `sky.*`, `pbr_*.glsl`, `water_*.glsl`, `post_frag.glsl`, `bloom_*.glsl` |
 | Rough hours | ≈ 12–14 | ≈ 11–13 |
 
@@ -246,6 +246,11 @@ differently, and the cost: one more depth pass of the boat only.
 ## 3. Track A: world and simulation
 
 ### A1. Island + lighthouse (~4.5 h)
+
+**Done** (branch `A1`), as described in [ARCHITECTURE.md §7.13](ARCHITECTURE.md). Where it differs from the
+plan below: the materials are baked into one albedo/roughness/normal map set from the height field
+(no terrain shader, so the shared PBR shader's IBL, fog and shadows apply unchanged), the beam is
+tilted down so it reaches the course, and the island gets no sun shadows (step 6: accepted).
 
 **Goal:** a small rocky island inside the course with a lighthouse. Gives the scene a landmark, a
 second hierarchy, and the spotlight source for B2.

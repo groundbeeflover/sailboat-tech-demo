@@ -28,6 +28,7 @@ add_executable(Master_TechDemo
     "src/shadow_map.cpp"
 
     # ---- Track A files (island, particles, flag, ...) ----
+    "src/island.cpp"
 
     # ---- Track B files (bloom, minimap, ...) ----
 
