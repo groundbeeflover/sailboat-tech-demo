@@ -108,6 +108,37 @@ GPUMesh::GPUMesh(const Mesh& cpuMesh)
     m_numIndices = static_cast<GLsizei>(3 * cpuMesh.triangles.size());
 }
 
+GPUMesh::GPUMesh(const Mesh& base, const Mesh& target)
+    : GPUMesh(base)
+{
+    if (target.vertices.size() != base.vertices.size())
+        throw MeshLoadingException("A blend-shape target needs the same vertices as its base mesh");
+
+    // One interleaved delta per vertex: attribute 4 = position, attribute 5 = normal.
+    struct BlendDelta {
+        glm::vec3 position;
+        glm::vec3 normal;
+    };
+    std::vector<BlendDelta> deltas(base.vertices.size());
+    for (size_t i = 0; i < deltas.size(); ++i) {
+        deltas[i].position = target.vertices[i].position - base.vertices[i].position;
+        deltas[i].normal = target.vertices[i].normal - base.vertices[i].normal;
+    }
+
+    // Add the attributes to the VAO the delegated constructor built.
+    glBindVertexArray(m_vao);
+    glGenBuffers(1, &m_vboBlend);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vboBlend);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(deltas.size() * sizeof(BlendDelta)), deltas.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(4);
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(4, 3, GL_FLOAT, GL_FALSE, sizeof(BlendDelta), (void*)offsetof(BlendDelta, position));
+    glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, sizeof(BlendDelta), (void*)offsetof(BlendDelta, normal));
+    glBindVertexArray(0);
+}
+
+
+
 GPUMesh::GPUMesh(GPUMesh&& other)
 {
     moveInto(std::move(other));
@@ -166,6 +197,7 @@ void GPUMesh::moveInto(GPUMesh&& other)
     m_ibo = other.m_ibo;
     m_vbo = other.m_vbo;
     m_vboTangents = other.m_vboTangents;
+    m_vboBlend = other.m_vboBlend;
     m_vao = other.m_vao;
     m_uboMaterial = other.m_uboMaterial;
 
@@ -174,6 +206,7 @@ void GPUMesh::moveInto(GPUMesh&& other)
     other.m_ibo = INVALID;
     other.m_vbo = INVALID;
     other.m_vboTangents = INVALID;
+    other.m_vboBlend = INVALID;
     other.m_vao = INVALID;
     other.m_uboMaterial = INVALID;
 }
@@ -186,6 +219,8 @@ void GPUMesh::freeGpuMemory()
         glDeleteBuffers(1, &m_vbo);
     if (m_vboTangents != INVALID)
         glDeleteBuffers(1, &m_vboTangents);
+    if (m_vboBlend != INVALID)
+        glDeleteBuffers(1, &m_vboBlend);
     if (m_ibo != INVALID)
         glDeleteBuffers(1, &m_ibo);
     if (m_uboMaterial != INVALID)

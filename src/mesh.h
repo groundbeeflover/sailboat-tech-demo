@@ -34,6 +34,10 @@ std::vector<glm::vec4> computeTangents(const Mesh& mesh);
 class GPUMesh {
 public:
     GPUMesh(const Mesh& cpuMesh);
+    // A mesh with one blend shape: draws `base`, plus the per-vertex differences (target - base) of
+    // positions and normals as vertex attributes 4 and 5, which pbr_vert.glsl and shadow_vert.glsl
+    // scale by DrawItem::blendWeight. Both meshes need the same vertices in the same order.
+    GPUMesh(const Mesh& base, const Mesh& target);
     // Cannot copy a GPU mesh because it would require reference counting of GPU resources.
     GPUMesh(const GPUMesh&) = delete;
     GPUMesh(GPUMesh&&);
@@ -66,6 +70,7 @@ private:
     GLuint m_ibo { INVALID };
     GLuint m_vbo { INVALID };
     GLuint m_vboTangents { INVALID };
+    GLuint m_vboBlend { INVALID }; // blend-shape deltas, only for meshes made with a target
     GLuint m_vao { INVALID };
     GLuint m_uboMaterial { INVALID };
 };

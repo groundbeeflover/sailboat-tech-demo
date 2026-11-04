@@ -21,6 +21,8 @@ constexpr float BoomHeight = 1.15f; // above the mast foot
 constexpr float BoomLength = 3.4f;
 constexpr float SailFoot = 3.25f;
 constexpr float SailLuff = MastHeight - BoomHeight - 0.25f;
+constexpr float SailCamber = 0.1f; // depth of the full sail, as a fraction of the chord
+constexpr float SailTwistDeg = 12.0f; // how much further to leeward the full sail's head turns than its foot
 constexpr float CabinZ = -0.675f;
 constexpr glm::vec3 CabinHalfExtents { 0.75f, 0.25f, 1.025f };
 constexpr float DeckCameraZ = -3.3f;
@@ -100,7 +102,10 @@ Boat::Boat()
     GPUMesh* cabinMesh = addMesh(makeBox(CabinHalfExtents));
     GPUMesh* mastMesh = addMesh(makeCylinder(0.075f, 0.05f, MastHeight));
     GPUMesh* boomMesh = addMesh(makeCylinderBetween(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -BoomLength), 0.05f));
-    GPUMesh* sailMesh = addMesh(makeSail(SailFoot, SailLuff));
+    // The sail is a blend shape: base = flat (no camber, no twist), target = full. The vertex shaders
+    // draw base + blendWeight * (target - base); update() sets the weight from the wind.
+    m_meshes.push_back(std::make_unique<GPUMesh>(makeSail(SailFoot, SailLuff, 0.0f, 0.0f), makeSail(SailFoot, SailLuff, SailCamber, SailTwistDeg)));
+    GPUMesh* sailMesh = m_meshes.back().get();
 
     // Rudder blade + stock, modelled around the pivot (origin) so the node can simply rotate about y.
     Mesh blade = makeBox(glm::vec3(0.025f, 0.55f, 0.2f));
@@ -224,10 +229,10 @@ void Boat::update(float dt, float time, const FeatureToggles& toggles, const Bez
     const float targetBoom = windSide * trim;
     m_boomAngle += std::clamp(targetBoom - m_boomAngle, -1.2f * dt, 1.2f * dt);
     // Billow to leeward (boom-local -x when the boom is out to starboard), flat when pointing into the wind.
-    const float fullness = (0.25f + 0.75f * toggles.windStrength) * glm::smoothstep(0.35f, 0.7f, m_windAngle);
+    // The UI can set the fullness by hand instead (report figures of weight 0, 0.5 and 1).
+    const float fullness = toggles.sailShapeOverride ? toggles.sailShapeWeight
+                                                     : (0.25f + 0.75f * toggles.windStrength) * glm::smoothstep(0.35f, 0.7f, m_windAngle);
     smoothTowards(m_billow, (m_boomAngle >= 0.0f ? -1.0f : 1.0f) * fullness, dt, 0.25f);
-    // Never scale to exactly zero: the normal matrix (inverse transpose) would be singular.
-    const float sailScaleX = std::abs(m_billow) < 0.05f ? std::copysign(0.05f, m_billow) : m_billow;
 
     // ---- 6. Rudder follows the turn rate (blade to port turns the boat to port)
     smoothTowards(m_rudderAngle, std::clamp(-3.0f * yawRate, -0.6f, 0.6f), dt, 0.3f);
@@ -236,7 +241,9 @@ void Boat::update(float dt, float time, const FeatureToggles& toggles, const Bez
     m_root->anim = translate(glm::vec3(position.x, m_heave, position.z)) * rotateY(yaw) * rotateX(m_pitch) * rotateZ(m_roll + m_heel);
     m_rudder->anim = rotateY(m_rudderAngle);
     m_boom->anim = rotateY(m_boomAngle);
-    m_sail->anim = glm::scale(glm::mat4(1.0f), glm::vec3(sailScaleX, 1.0f, 1.0f));
+    // The billow is a blend weight, not a scale: the sail's matrix stays rigid, so its normal matrix is
+    // never singular, and the sail passes smoothly through flat when it changes sides during a tack.
+    m_sail->blendWeight = m_billow;
     m_vane->anim = rotateY(std::atan2(windLocal.x, windLocal.y)); // pointer (+z) towards where the wind comes from
     m_root->updateWorld();
 
@@ -246,4 +253,5 @@ void Boat::update(float dt, float time, const FeatureToggles& toggles, const Bez
     m_telemetry.boomDeg = glm::degrees(m_boomAngle);
     m_telemetry.heelDeg = glm::degrees(m_heel);
     m_telemetry.rudderDeg = glm::degrees(m_rudderAngle);
+    m_telemetry.sailWeight = m_billow;
 }
