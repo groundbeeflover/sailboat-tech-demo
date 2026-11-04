@@ -38,6 +38,8 @@ struct DrawItem {
     // Blend-shape weight: the vertex shaders add blendWeight * (delta position/normal) from vertex
     // attributes 4 and 5. Meshes without those attributes are unaffected by it.
     float blendWeight { 0.0f };
+    // A light source must not occlude its own spotlight; other objects still cast spot shadows.
+    bool castsSpotShadow { true };
 };
 
 // Debug geometry (Bezier curve, control polygon). Kept free of OpenGL types so the simulation

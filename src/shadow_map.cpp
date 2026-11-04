@@ -1,4 +1,5 @@
 #include "shadow_map.h"
+#include "lights.h"
 #include <framework/disable_all_warnings.h>
 DISABLE_WARNINGS_PUSH()
 #include <glm/geometric.hpp>
@@ -74,4 +75,13 @@ glm::mat4 directionalLightMatrix(const glm::vec3& lightDirection, const glm::vec
     // The view looks down -z, so the near/far distances are measured along -z.
     const glm::mat4 projection = glm::ortho(c.x - halfExtent, c.x + halfExtent, c.y - halfExtent, c.y + halfExtent, -c.z - depthRange, -c.z + depthRange);
     return projection * view;
+}
+
+glm::mat4 spotLightMatrix(const SpotLight& spot, float nearPlane)
+{
+    const glm::vec3 direction = glm::normalize(spot.direction);
+    const glm::vec3 up = std::abs(direction.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::mat4 view = glm::lookAt(spot.position, spot.position + direction, up);
+    // SpotLight's angles are half-angles; glm::perspective takes full vertical FOV.
+    return glm::perspective(2.0f * spot.outerAngle, 1.0f, nearPlane, spot.range) * view;
 }

@@ -9,6 +9,7 @@ DISABLE_WARNINGS_PUSH()
 #include <glm/gtc/matrix_inverse.hpp>
 DISABLE_WARNINGS_POP()
 #include <array>
+#include <cmath>
 
 namespace {
 
@@ -18,6 +19,9 @@ constexpr GLint NormalUnit = 1;
 constexpr GLint RoughnessUnit = 2;
 constexpr GLint EnvironmentUnit = 3;
 constexpr GLint ShadowUnit = 4; // only ever used by sampler2DShadow (mixing sampler types on one unit is an error)
+constexpr GLint SpotShadowUnit = 5; // second independent sampler2DShadow
+constexpr int SpotShadowResolution = 1024;
+constexpr float SpotNearPlane = 0.5f;
 
 Shader buildShader(const char* vertexFile, const char* fragmentFile)
 {
@@ -37,8 +41,10 @@ Renderer::Renderer()
     , m_postShader(buildShader("fullscreen_vert.glsl", "post_frag.glsl"))
     , m_shadowShader(buildShader("shadow_vert.glsl", "shadow_frag.glsl")) // the starter code's depth-only shaders
     , m_depthDebugShader(buildShader("fullscreen_vert.glsl", "depth_debug_frag.glsl"))
+    , m_spotDepthDebugShader(buildShader("fullscreen_vert.glsl", "spot_depth_debug_frag.glsl"))
 {
     m_shadowMap.resize(2048);
+    m_spotShadowMap.resize(SpotShadowResolution);
 
     // Core profile needs some VAO bound even for draws that generate their vertices from gl_VertexID.
     glGenVertexArrays(1, &m_emptyVao);
@@ -65,6 +71,9 @@ void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water
 {
     if (toggles.shadows)
         drawShadowMap(frame, lists.opaque, toggles);
+    // Independent second depth pass, only at night while the island's lamp is enabled.
+    if (toggles.spotlight && frame.spot.enabled && toggles.spotShadows)
+        drawSpotShadowMap(frame, lists.opaque);
 
     m_hdr.resize(frame.framebufferSize);
     m_hdr.bind();
@@ -90,6 +99,8 @@ void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water
     tonemap(frame, toggles);
     if (toggles.shadows && toggles.showShadowMap)
         drawShadowMapDebugView(frame);
+    if (toggles.spotlight && frame.spot.enabled && toggles.spotShadows && toggles.showSpotShadowMap)
+        drawSpotShadowMapDebugView(frame);
 }
 
 void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items, const FeatureToggles& toggles)
@@ -107,15 +118,58 @@ void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawIt
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.0f);
 
-    // Only the boat and buoys cast shadows. The water only receives: letting the waves cast onto
-    // themselves would need much more bias and gives little visible gain.
+    // The water receives but does not cast shadows; blend-shaped sails cast correctly.
+    renderDepthItems(m_lightSpace, items);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+}
+
+void Renderer::renderDepthItems(const glm::mat4& lightSpace, const std::vector<DrawItem>& items, bool spotlightPass)
+{
     m_shadowShader.bind();
     for (const DrawItem& item : items) {
-        uniform::set("mvpMatrix", m_lightSpace * item.model);
-        uniform::set("blendWeight", item.blendWeight); // the shadow must follow blend-shape deformation too
+        if (spotlightPass && !item.castsSpotShadow)
+            continue;
+        uniform::set("mvpMatrix", lightSpace * item.model);
+        uniform::set("blendWeight", item.blendWeight);
         item.mesh->draw();
     }
+}
+
+void Renderer::drawSpotShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items)
+{
+    m_spotLightSpace = spotLightMatrix(frame.spot, SpotNearPlane);
+    m_spotShadowMap.bind();
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE); // a single-sheet sail casts on both sides
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 2.0f);
+    // All opaque meshes except the emitting lamp itself cast into this map.
+    // The terrain, lantern structure, boat, and moving sail still occlude the beam.
+    renderDepthItems(m_spotLightSpace, items, true);
     glDisable(GL_POLYGON_OFFSET_FILL);
+}
+
+void Renderer::drawSpotShadowMapDebugView(const FrameContext& frame)
+{
+    const GLsizei size = frame.framebufferSize.y / 4;
+    glViewport(12 + size + 12, 12, size, size);
+    glDisable(GL_DEPTH_TEST);
+    m_spotDepthDebugShader.bind();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_spotShadowMap.depthTexture());
+    // For debugging sampler2D raw depth, disable the shadow comparison temporarily.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    uniform::set("depthTexture", 0);
+    uniform::set("nearPlane", SpotNearPlane);
+    uniform::set("farPlane", frame.spot.range);
+    glBindVertexArray(m_emptyVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glViewport(0, 0, frame.framebufferSize.x, frame.framebufferSize.y);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Renderer::drawShadowMapDebugView(const FrameContext& frame)
@@ -163,6 +217,21 @@ void Renderer::setFrameUniforms(const FrameContext& frame, const Sky& sky, const
     glActiveTexture(GL_TEXTURE0 + ShadowUnit);
     glBindTexture(GL_TEXTURE_2D, m_shadowMap.depthTexture());
     uniform::set("shadowMap", ShadowUnit);
+
+    const bool activeSpot = toggles.spotlight && frame.spot.enabled;
+    uniform::set("useSpotlight", activeSpot);
+    uniform::set("spotPosition", frame.spot.position);
+    uniform::set("spotDirection", frame.spot.direction);
+    uniform::set("spotColor", frame.spot.color);
+    uniform::set("spotCosInner", std::cos(frame.spot.innerAngle));
+    uniform::set("spotCosOuter", std::cos(frame.spot.outerAngle));
+    uniform::set("spotRange", frame.spot.range);
+    uniform::set("useSpotShadows", activeSpot && toggles.spotShadows);
+    uniform::set("spotLightSpaceMatrix", m_spotLightSpace);
+    uniform::set("spotBias", toggles.spotBias);
+    glActiveTexture(GL_TEXTURE0 + SpotShadowUnit);
+    glBindTexture(GL_TEXTURE_2D, m_spotShadowMap.depthTexture());
+    uniform::set("spotShadowMap", SpotShadowUnit);
 }
 
 void Renderer::drawOpaque(const FrameContext& frame, const std::vector<DrawItem>& items, const Sky& sky, const FeatureToggles& toggles)

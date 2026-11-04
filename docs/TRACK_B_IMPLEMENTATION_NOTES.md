@@ -1,8 +1,8 @@
 # Track B — renderer review, decisions and report notes
 
-> Maintained as features are implemented. **B1 Bloom is implemented; B2–B4 are not yet implemented.**
-> The full sailboat application still needs an end-to-end build and screenshots on a workstation
-> with the project's OpenGL/GLFW development dependencies (see Validation below).
+> Maintained as features are implemented. **B1 Bloom and B2 Lighthouse spotlight are implemented; B3–B4 are not yet implemented.**
+> A1+B1 was reported working together by the user on their workstation (2026-11-04). B2 has
+> passed isolated validation but still needs an end-to-end application run and screenshots.
 >
 > Do not copy the exact dates/owner percentages into the final report without confirming them
 > against the two group members' actual contributions.
@@ -41,8 +41,9 @@ No Track A slots were changed.
 
 ## 2. B1 — Bloom
 
-**Status:** implemented and tested in isolation with a real OpenGL context; full application
-build, visual inspection of the *sailboat scene*, and report screenshots are still pending.
+**Status:** implemented and tested in isolation with a real OpenGL context. The user subsequently
+confirmed A1+B1 run together correctly on their workstation (2026-11-04); report screenshots
+and numerical performance measurements were not supplied.
 
 ### Aim and technique
 
@@ -196,12 +197,168 @@ may make bloom visually subtle. Optionally repeat at night after A1/B2 bring the
    <https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/>
    — existing project's tone-map fit, now placed after HDR bloom composition.
 
-## 3. Upcoming Track B interfaces (not implemented in this change)
+## 3. B2 — Lighthouse spotlight and second shadow map
 
-- **B2 Spotlight + shadow map:** consume `frame.spot` from Track A's lighthouse, with a temporary
-  light only if testing B2 before A1 merges. Reuse PBR and water GGX/visibility logic; second
-  perspective shadow map on unit 5. Keep directional sun shadow implementation intact. New
-  controls in Track B slots.
+**Status (2026-11-04):** implemented in an isolated B2 patch on the supplied A1+B1 baseline;
+C++ syntax checks and standalone real OpenGL validation passed. The complete Windows application
+and night-scene screenshots have **not** been tested here, so merge only after the branch-level
+visual check described below.
+
+### How it connects to A1 and B1
+
+- Track A has already merged `frame.spot = m_island.lampLight()` into `Application::run()`.
+  `Island::update()` rotates the lamp and fades its intensity up at night; `lampOn()` automatically
+  disables it if the island is hidden. B2 **does not** modify `island.*` or `lights.h`.
+- Track B samples `FrameContext::spot` through its existing public interface. When `spotlight=0`
+  or the lamp is off, the new shading branch does nothing; when `spotShadows=0`, lighting is still
+  present but no second depth pass runs and the contribution is unshadowed. The existing sun/moon
+  `shadows` toggle only controls the orthographic map. The controls are intentionally independent
+  to demonstrate **shadows for multiple light sources**.
+- The colour is added to the **HDR scene**, before B1 extracts highlights, so bright lamp-lit
+  surfaces can bloom without special coordination or altering the post-processing pipeline.
+
+### Render sequence and algorithm
+
+```text
+if sun shadows: render sun/moon orthographic map (existing, texture unit 4)
+if lamp active and spot shadows: render spotlight perspective map (new, unit 5)
+HDR scene: PBR boat/island/terrain + water, evaluating sun + spotlight separately
+B1 Bloom if enabled -> exposure/ACES tone mapping -> optional shadow-map debug overlays
+```
+
+The spotlight is **finite and directional**, unlike the sun. Its transform is
+`P * V = glm::perspective(2 * outerAngle, 1, 0.5, range) *
+glm::lookAt(position, position + direction, up)`, with a vertical-direction fallback up vector.
+The angles stored in `SpotLight` are half-angles (default 8° inner, 12° outer).
+The full cone field of view is twice the outer angle; a 1024² depth texture gives substantially
+more resolution to the relevant cone than the existing sun's wide orthographic map. The near
+plane of 0.5 m avoids extreme near-distance depth precision. Because the spot origin is
+inside the solid lamp housing (which extends 0.65 m along the beam), the lamp mesh
+must be excluded from its own depth pass or it will block the entire cone.
+
+We reused `ShadowMap`'s depth texture and hardware `sampler2DShadow` comparison sampler rather
+than inventing a second FBO class. The second map keeps its own FBO, projection, and binding
+(texture unit **5**; sun shadow map remains on **4**; PBR material/IBL texture units remain 0–3).
+The sun and spotlight passes reuse `renderDepthItems()`, including the `blendWeight` deformation
+for moving sails. The water is a *receiver* but not a caster, avoiding a second wave-depth pass.
+The spotlight depth pass renders the current opaque list except the emitting lamp mesh
+(`SceneNode::castsSpotShadow = false` on the lamp); this avoids a self-occluding
+shadow map. The island terrain, lantern structure and boat still occlude the rotating
+lamp. The sun shadow pass can still receive the lamp mesh. Its GPU cost is one additional 1024² depth pass
+when the lamp and spot shadows are active, plus spotlight BRDF calculations and PCF lookups in
+PBR and water fragments. A more aggressive optimisation would cull meshes outside the cone.
+
+### Spotlight BRDF, falloff, and shadow visibility
+
+For a surface point `P`, `L = normalize(spot.position - P)`, `d = length(spot.position - P)`;
+`cone = smoothstep(cos(outerAngle), cos(innerAngle), dot(-L, spot.direction))`. We pass both
+cosines once per frame from the CPU, rather than calling `cos` in every fragment. Attenuation is
+`cone * (1 - (d / range)^4)^2 / max(d², 1)` for `0 < d < range`, else zero. The inverse-square
+term gives distance falloff, the soft inner-to-outer transition avoids a hard beam edge, and
+the range factor avoids a sharp discontinuity at the far clip plane. The same formula is kept
+in the PBR and water shaders (GLSL 4.1 has no built-in textual include system).
+
+In `pbr_frag.glsl`, this HDR radiance passes through the *same* Cook–Torrance GGX/Schlick–Smith
+BRDF already used for sunlight, with an equivalent Blinn–Phong branch when PBR is disabled.
+Environment light, emission and the original sun remain independent: occluding the lamp cannot
+black out a surface that still receives the sky. `water_frag.glsl` adds a GGX lamp glint and a
+small diffuse scattering term to make the pool of light, and especially the boat's shadow on
+the water, visible even when the narrow water specular highlight is not aligned with the camera.
+These two shader paths intentionally do **not** render a separate volumetric cone mesh; that was
+an optional extension in the TODO, not a core requirement.
+
+For each fragment, `spotLightSpaceMatrix * vec4(P,1)` maps to light clip coordinates. We perform
+perspective division, remap to `[0,1]`, and compare its `z` against the spotlight's depth texture
+with hardware bilinear PCF; optional `(2r+1)^2` neighbourhood PCF uses the existing PCF-radius
+slider. Samples outside the light frustum are unshadowed (the cone attenuation is already zero).
+As with the sun, the bias grows with the light/normal slope, but **the bias parameter is separate**:
+projected perspective depth is non-linear, so using the sun's orthographic `shadowBias=0.0004`
+would be inappropriate. We start at `spotBias=0.00008` with a 0–0.0005 UI range; excessive bias
+causes detached shadows ('peter-panning'), too little gives self-shadow acne. Polygon offset
+(1.5, 2.0) remains enabled while rasterizing both depth maps. The shadow lookup uses the
+**geometric** normal for the slope, not the normal-map perturbation.
+
+An additional fullscreen debug shader converts perspective depth back to approximate linear
+light-space distance before display, because raw spot depth otherwise appears almost uniformly
+white. `showSpotShadowMap` draws this overlay beside the existing sun debug view; it can be
+enabled independently via UI and `--set`.
+
+### What changed
+
+| File | B2 change and reason |
+|---|---|
+| `src/shadow_map.h/.cpp` | Add pure `spotLightMatrix()` computation; reuse `ShadowMap` rather than duplicate depth-FBO lifecycle. |
+| `src/renderer.h/.cpp` | Own second depth target/transform, shared depth draw, conditional second pass, sampler unit 5, uniforms and debug overlay. |
+| `shaders/pbr_frag.glsl` | Add shadowed spot radiance with physically motivated GGX and Blinn–Phong fallback. |
+| `shaders/water_frag.glsl` | Add cone highlight plus a scattering footprint that can reveal the moving boat shadow. |
+| `shaders/spot_depth_debug_frag.glsl` | Linearise the spotlight's non-linear depth for inspection and report figures. |
+| `src/feature_toggles.h` | Independent enable, shadow enable, bias and debug flags under Track B. |
+| `src/application.cpp` | Track B-only UI method/call and `--set` mappings; Track A's lamp hookup untouched. |
+| `docs/TODO.md`, `docs/sailboat_plan.md`, this file | Implementation status, technical rationale, testing and report material. |
+
+`CMakeLists.txt` needs **no code changes**: no new `.cpp` was added, and its existing shader glob
+copies the new `.glsl` file after CMake is reconfigured.
+
+### Reproducible validation and screenshots
+
+Choose a viewpoint where the lighthouse beam crosses a visible section of water or the boat.
+A1 rotates the lamp about `0.6 rad/s`, and the course is around 100 m from the island; if the
+boat is outside the cone in a particular screenshot, adjust `--frames`, `--camera orbit` or the
+interactive camera. Hold frame count and camera/time constant for each comparison pair:
+
+```powershell
+# Run on Windows from the project root after building the app.
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b2_light_off.png --frames 240 --camera orbit --time 22 --set spotlight=0 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b2_light_unshadowed.png --frames 240 --camera orbit --time 22 --set spotlight=1 --set spotShadows=0 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b2_light_shadowed.png --frames 240 --camera orbit --time 22 --set spotlight=1 --set spotShadows=1 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b2_shadow_debug.png --frames 240 --camera orbit --time 22 --set spotlight=1 --set spotShadows=1 --set showSpotShadowMap=1 --set bloom=0
+```
+
+The screenshot commands are examples, **not actual screenshots**. Test at night and near the
+boat/beam intersection. Compare sun shadows on and off separately, enable Bloom after the base
+lighting is proven, then inspect the shadow-map debug view for moving geometry. Test the island
+toggle (lamp must go off), 0/1 PCF radius, spotlight bias, PBR off, different camera modes, and
+OpenGL resize. Observe frame time before and after enabling `spotShadows` at a fixed camera.
+
+### Actual validation recorded here
+
+- `g++ -std=c++20 -Wall -Wextra -fsyntax-only` passed for `shadow_map.cpp`, `renderer.cpp`, and
+  `application.cpp` using vendored headers and a temporary external missing-GLU-header shim.
+  Only the baseline warning in `Application::run()` about the late `FrameContext::spot` aggregate
+  field remained; the source files have no new compiler warnings.
+- With Mesa's surfaceless EGL context (**OpenGL 4.5 Core Profile**, GLSL 4.10), all new or
+  modified programs compiled **and linked**: PBR vertex/fragment, water vertex/fragment,
+  shadow vertex/fragment and fullscreen/depth-debug pair.
+- A synthetic PBR triangle on a 32×32 floating-point colour target verified the actual GPU
+  branch and shadow sampling. At a sample pixel, red HDR brightness was **0.00000** with the
+  lamp off, **0.70361** with the lamp on/unshadowed, and **0.00000** when its shadow sampler was
+  given a nearer occluder depth. `glGetError() == GL_NO_ERROR`.
+- This does **not** replace testing the complete course scene: the sandbox lacks the GLFW
+  XRandR/GLU development packages for the full application. No real app screenshots or measured
+  end-to-end frame-rate impact were produced, and real-world shadow bias may need tuning.
+
+### B2 report paragraph (adapt after visual testing)
+
+> We added a second shadow-casting light sourced from the animated lighthouse node. Unlike the
+> sun's parallel directional rays, the lighthouse emits a finite cone, so its shadow map uses a
+> 1024×1024 **perspective** projection fitted to the outer cone angle and light range. The
+> renderer first records the opaque scene's depths from the lamp, then shades the boat, island
+> and Gerstner water with a local Cook–Torrance direct-light term, inverse-square attenuation
+> and a smooth spotlight cone. Projected receiver positions are compared to the lamp depth
+> texture with hardware PCF and slope-dependent bias. The spotlight has an independent depth
+> bias because perspective depth is non-linear; this reduces self-shadow acne without
+> over-offsetting the shadows. We reused the existing depth-map class and shadow shaders to
+> limit duplicated code, at the cost of a second depth pass whenever the lamp casts shadows.
+> The independent spotlight and shadow toggles allow comparison of no lamp, unshadowed lamp and
+> shadowed lamp, while the debug view shows the actual perspective map. Bright illuminated areas
+> pass into the existing HDR Bloom pipeline.
+
+**References:** [LearnOpenGL: Shadow Mapping](https://learnopengl.com/Advanced-Lighting/Shadows/Shadow-Mapping)
+for the depth rendering, bias, PCF and distinction between orthographic and perspective lights;
+[LearnOpenGL: Light Casters](https://learnopengl.com/Lighting/Light-casters) for smooth cone
+cutoffs and distance attenuation; course handout `final_project.html` and local `docs/TODO.md` B2.
+
+## 4. Upcoming Track B interfaces (not implemented in this change)
 - **B3 Minimap:** render a second camera to a colour target and display with ImGui. Reuse the
   draw lists from Track A without requiring Track A renderer changes.
 - **B4 Crest foam:** derive the Jacobian determinant of horizontal Gerstner displacement in the

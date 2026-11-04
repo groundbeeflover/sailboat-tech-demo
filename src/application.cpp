@@ -65,6 +65,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
+        { "spotlight", &t.spotlight }, { "spotShadows", &t.spotShadows }, { "showSpotShadowMap", &t.showSpotShadowMap },
 
     };
     const std::pair<const char*, float*> floats[] = {
@@ -77,6 +78,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
 
         // Track B parameters:
         { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
+        { "spotBias", &t.spotBias },
 
     };
     const std::pair<const char*, int*> ints[] = {
@@ -246,6 +248,7 @@ private:
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
+        spotlightUi();
 
         if (ImGui::Button("Save screenshot (P)"))
             m_screenshotRequested = true;
@@ -368,6 +371,18 @@ private:
             ImGui::SliderInt("Blur iterations", &t.bloomIterations, 1, 6);
             ImGui::Checkbox("Show bloom buffer only", &t.showBloomBuffer);
             ImGui::TextDisabled("Try time 17.5 h: sun disk and glitter path.");
+        }
+    }
+
+    void spotlightUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Lighthouse spotlight")) {
+            ImGui::Checkbox("Lighthouse light", &t.spotlight);
+            ImGui::Checkbox("Spotlight shadows", &t.spotShadows);
+            ImGui::SliderFloat("Spot depth bias", &t.spotBias, 0.0f, 0.0005f, "%.6f");
+            ImGui::Checkbox("Show spot shadow map", &t.showSpotShadowMap);
+            ImGui::TextDisabled("Night: time 0-5 or 20-24. Compare light/shadows on and off.");
         }
     }
 

@@ -65,7 +65,9 @@ Reproducible screenshots without a window (fixed 1/60 s time step):
 | Buoyancy (own feature) | The CPU evaluates the same wave sum at 4 hull points → heave, pitch, roll; buoys bob too | Boat and course → Buoyancy |
 | Wind-driven rig (own feature) | Boom trims to the wind with a rate limit (visible tacks/gybes), sail billows to leeward, heel, vane, speed polar | Wind → From, Strength; Boat → Wind affects speed |
 | Changing lighting (day-night) | Sun path, sunset colours, moonlight, stars; sky cubemap re-rendered when the sun moves | Sky and light → Time of day, Day-night cycle |
-| Shadows (one light) | Sun/moon shadow map, PCF, slope-scaled bias, texel snapping, edge fade, debug view | Shadows → … |
+| Shadows (sun/moon) | Orthographic shadow map, PCF, slope-scaled bias, texel snapping, edge fade, debug view | Shadows → … |
+| B1 Bloom | Half-resolution bright-pass extraction, separable Gaussian blur, pre-tone-map HDR composite | Bloom (HDR post-processing) → … |
+| B2 Second shadow-casting light | Lighthouse perspective shadow map (1024²), smooth cone, direct PBR plus water illumination, independently toggleable PCF shadows | Lighthouse spotlight (B2) → … |
 | HDR + tone mapping | RGBA16F scene target, ACES filmic curve, exposure (prepares bloom) | Sky and light → Exposure |
 | Island + lighthouse | fBm height field with a radial falloff (bays, cliffs, a levelled plateau), normals from central differences; sand/grass/rock maps baked from height and slope; lighthouse hierarchy whose lamp turns, glows at night and is exposed as a `SpotLight` | Island and lighthouse → Island, Lighthouse speed |
 
@@ -835,7 +837,8 @@ flowchart TD
 
 | Pass | Target | Shader(s) | Notes |
 |---|---|---|---|
-| Shadow | `ShadowMap` (depth 24, 2048²) | `shadow_vert/frag` (starter) | polygon offset 1.5/2.0, no culling |
+| Sun/moon shadow | `ShadowMap` (depth 24, 2048²) | `shadow_vert/frag` (starter) | orthographic; polygon offset 1.5/2.0, no culling |
+| Lighthouse shadow (optional) | second `ShadowMap` (depth 24, 1024²) | `shadow_vert/frag` | perspective; only when spotlight and spot shadows active |
 | Opaque | `HdrTarget` RGBA16F | `pbr_vert/frag` | no back-face culling (sail) |
 | Water | `HdrTarget` | `water_vert/frag` | optional `glPolygonMode(GL_LINE)` |
 | Lines | `HdrTarget` | `line_vert/frag` | round points via `gl_PointCoord` |
@@ -843,7 +846,7 @@ flowchart TD
 | Skybox | `HdrTarget` | `skybox_vert/frag` | depth 1, `GL_LEQUAL`, skipped in top view |
 | Bloom (optional) | 2× half-res RGBA16F FBOs | `bloom_bright_frag`, `bloom_blur_frag` | soft bright pass, 5-fetch separable 9-tap Gaussian, 1–6 iterations |
 | Tonemap | default framebuffer | `fullscreen_vert` + `post_frag` | HDR scene + optional bloom → exposure → ACES → gamma 2.2 |
-| Shadow-map view | default framebuffer corner | `fullscreen_vert` + `depth_debug_frag` | compare mode off while drawing |
+| Shadow-map views | default framebuffer corner | `depth_debug_frag` + `spot_depth_debug_frag` | compare mode off while drawing; spotlight depth linearised |
 | Sky cubemap | cubemap faces (on change) | `fullscreen_vert` + `sky_frag` | in `Sky::update` |
 
 | Unit | PBR shader | Water shader |
@@ -852,7 +855,8 @@ flowchart TD
 | 1 | normal map | – |
 | 2 | roughness map | – |
 | 3 | environment cubemap | environment cubemap |
-| 4 | shadow map (`sampler2DShadow`) | shadow map |
+| 4 | sun shadow map (`sampler2DShadow`) | sun shadow map |
+| 5 | spotlight shadow map (`sampler2DShadow`) | spotlight shadow map |
 
 Post-processing uses scene HDR on texture unit 0 and optional bloom on unit 1; these are
 separate shader programs, so they do not conflict with the scene-pass sampler bindings.
@@ -875,6 +879,8 @@ materials flip N towards the viewer.
   the shader averages a (2r+1)² grid. Border = 1 (lit), fade near the edge.
 - Bias: `glPolygonOffset` in the depth pass + slope-scaled bias in the lookup.
 - Water receives but does not cast.
+- B2: lighthouse depth map on unit 5 has a perspective matrix, its own bias and PCF; it only
+  runs when the A1 lamp is on and `spotShadows` is enabled. See [B2 notes](TRACK_B_IMPLEMENTATION_NOTES.md#3-b2-lighthouse-spotlight-and-second-shadow-map).
 
 ### 7.11 Cameras ([camera.cpp](../src/camera.cpp))
 

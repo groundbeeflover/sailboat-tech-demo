@@ -27,7 +27,7 @@ void SceneNode::collect(std::vector<DrawItem>& out) const
     if (!visible)
         return; // hides the whole subtree
     if (mesh && material)
-        out.push_back(DrawItem { mesh, material, world, blendWeight });
+        out.push_back(DrawItem { mesh, material, world, blendWeight, castsSpotShadow });
     for (const auto& child : children)
         child->collect(out);
 }
