@@ -7,6 +7,7 @@
 DISABLE_WARNINGS_PUSH()
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec2.hpp>
 DISABLE_WARNINGS_POP()
 #include <cstddef>
 #include <memory>
@@ -44,6 +45,10 @@ public:
 
     void update(float dt, float time, const FeatureToggles& toggles, const SprayEmitters& emitters, const Waves& waves);
     void draw(const FrameContext& frame);
+    // A splash at `point`, e.g. where the boat hits a buoy (A5): droplets thrown out along `normal`
+    // (world xz) and up, more of them and faster for a larger impact speed (m/s).
+    void burst(const glm::vec3& point, const glm::vec2& normal, float speed);
+
 
     size_t count() const { return m_count; }
 

@@ -209,6 +209,31 @@ void ParticleSystem::spawnWake(const glm::mat4& stern, const glm::vec3& sternVel
     p.alpha = 0.0f;
 }
 
+void ParticleSystem::burst(const glm::vec3& point, const glm::vec2& normal, float speed)
+{
+    const glm::vec2 along(-normal.y, normal.x); // along the obstacle's edge
+    const float power = std::min(0.6f + 0.25f * speed, 1.8f);
+    const int count = static_cast<int>(std::min(80.0f * speed, 400.0f));
+    for (int k = 0; k < count && m_count < MaxParticles; ++k) {
+        Particle& p = m_particles[m_count++];
+        p.kind = Kind::Spray;
+        p.position = point + glm::vec3(randomRange(-0.3f, 0.3f), randomRange(0.0f, 0.2f), randomRange(-0.3f, 0.3f));
+        // Thrown up and back towards the boat, fanning out along the edge.
+        const glm::vec2 out = normal * randomRange(0.5f, 2.5f) + along * randomRange(-1.5f, 1.5f);
+        p.velocity = power * glm::vec3(out.x, randomRange(2.5f, 5.0f), out.y);
+        p.age = 0.0f;
+        p.life = randomRange(0.8f, 1.6f);
+        p.startSize = randomRange(0.15f, 0.3f);
+        p.endSize = p.startSize * randomRange(1.5f, 2.5f);
+        p.rotation = randomRange(0.0f, glm::two_pi<float>());
+        p.opacity = randomRange(0.6f, 0.95f);
+        p.size = p.startSize;
+        p.alpha = 0.0f;
+    }
+}
+
+
+
 void ParticleSystem::draw(const FrameContext& frame)
 {
     if (m_count == 0)

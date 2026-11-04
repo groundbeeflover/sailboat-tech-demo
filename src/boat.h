@@ -11,6 +11,7 @@ DISABLE_WARNINGS_PUSH()
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 DISABLE_WARNINGS_POP()
+#include <span>
 #include <memory>
 #include <vector>
 
@@ -36,7 +37,28 @@ class Boat {
 public:
     Boat();
 
-    void update(float dt, float time, const FeatureToggles& toggles, const BezierPath& course, const Waves& waves);
+    // ---- Free sailing (A5): steered by hand instead of following the course.
+    // A round obstacle on the water (a buoy, the island) that the boat bounces off.
+    struct Obstacle {
+        glm::vec2 center { 0.0f }; // world xz
+        float radius { 0.0f };
+    };
+    // What the boat needs from outside while it is free sailing.
+    struct Helm {
+        float steer { 0.0f }; // -1 = hard to port (A, left arrow), +1 = hard to starboard (D, right arrow)
+        std::span<const Obstacle> obstacles;
+    };
+    // The hardest hit of this frame; hit = false when the boat touched nothing.
+    struct Contact {
+        bool hit { false };
+        size_t obstacle { 0 }; // index into Helm::obstacles
+        glm::vec3 point { 0.0f }; // on the obstacle's edge, at the water surface
+        glm::vec2 normal { 0.0f }; // world xz, from the obstacle towards the boat
+        float speed { 0.0f }; // m/s with which the boat ran into it
+    };
+
+    void update(float dt, float time, const FeatureToggles& toggles, const BezierPath& course, const Waves& waves, const Helm& helm);
+    const Contact& contact() const { return m_contact; }
 
     SceneNode& root() { return *m_root; }
     glm::vec3 coursePosition() const { return m_position; } // on the course, y = 0
@@ -63,6 +85,7 @@ public:
 private:
     GPUMesh* addMesh(const Mesh& mesh);
     Texture* addTexture(const ImageRGBA& image, bool srgb);
+    void collide(glm::vec2& xz, float yaw, const Helm& helm, const Waves& waves, float time);
 
     HullShape m_shape;
     std::vector<std::unique_ptr<GPUMesh>> m_meshes;
@@ -87,6 +110,10 @@ private:
     glm::vec3 m_position { 0.0f };
     float m_yaw { 0.0f };
     float m_windAngle { 1.5f };
+    glm::vec2 m_velocity { 0.0f }; // free sailing: world xz, m/s
+    bool m_wasFreeSailing { false };
+    Contact m_contact;
+
 
     // Smoothed pose (gives the boat some inertia)
     float m_heave { 0.0f }, m_pitch { 0.0f }, m_roll { 0.0f }, m_heel { 0.0f };

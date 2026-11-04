@@ -26,6 +26,12 @@ constexpr float SailTwistDeg = 12.0f; // how much further to leeward the full sa
 constexpr float CabinZ = -0.675f;
 constexpr glm::vec3 CabinHalfExtents { 0.75f, 0.25f, 1.025f };
 constexpr float DeckCameraZ = -3.3f;
+constexpr float MaxRudder = 0.6f; // radians, hard over (the limit the course-following rudder uses too)
+constexpr float TurnRate = 0.1f; // yaw rate per (radian of rudder x m/s ahead): a ~17 m turning circle
+constexpr float HullCircleOffset = 2.2f; // the hull as two circles, this far ahead of and behind amidships
+constexpr float HullCircleRadius = 1.25f;
+constexpr float Restitution = 0.3f; // share of the speed into an obstacle that the boat bounces back with
+
 
 glm::mat4 translate(const glm::vec3& t) { return glm::translate(glm::mat4(1.0f), t); }
 glm::mat4 rotateX(float a) { return glm::rotate(glm::mat4(1.0f), a, glm::vec3(1, 0, 0)); }
@@ -163,26 +169,66 @@ Boat::Boat()
 
 }
 
-void Boat::update(float dt, float time, const FeatureToggles& toggles, const BezierPath& course, const Waves& waves)
+void Boat::update(float dt, float time, const FeatureToggles& toggles, const BezierPath& course, const Waves& waves, const Helm& helm)
 {
-    // ---- 1. Move along the course
+    // ---- 1. Move: along the course, or steered by hand (free sailing)
     const float speedFactor = toggles.windAffectsSpeed ? pointOfSailFactor(m_windAngle) * (0.4f + 0.6f * toggles.windStrength) : 1.0f;
     const float speed = toggles.pauseBoat ? 0.0f : toggles.boatSpeed * speedFactor;
     const float segments = static_cast<float>(course.segmentCount());
-    if (toggles.constantSpeed) {
-        // Advance the arc length and look up the matching parameter: equal distance per second.
-        m_distance = std::fmod(m_distance + speed * dt, course.length());
-        m_u = course.distanceToParameter(m_distance);
+    const bool freeSailing = toggles.freeSailing && m_initialised; // the very first frame starts on the course
+    m_contact = {};
+    glm::vec3 position;
+    float yaw;
+    if (freeSailing) {
+        if (!m_wasFreeSailing) // take over the current speed and heading, so switching on doesn't jolt
+            m_velocity = glm::vec2(std::sin(m_yaw), std::cos(m_yaw)) * m_telemetry.speed;
+        const glm::vec2 heading(std::sin(m_yaw), std::cos(m_yaw)); // boat +z in world xz
+        const glm::vec2 side(std::cos(m_yaw), -std::sin(m_yaw)); // boat +x (port) in world xz
+        float ahead = glm::dot(m_velocity, heading);
+        float drift = glm::dot(m_velocity, side);
+        // The helm moves the rudder. The rudder only turns the boat through the water flowing past it,
+        // so the turn rate grows with the speed: the turning circle stays the same size at any speed.
+        smoothTowards(m_rudderAngle, helm.steer * MaxRudder, dt, 0.2f);
+        yaw = wrapToPi(m_yaw - TurnRate * m_rudderAngle * ahead * dt);
+        // The sail pulls the boat up to its polar speed slowly (inertia); the keel kills sideways drift
+        // quickly, which is why a boat goes where it points.
+        smoothTowards(ahead, speed, dt, 2.5f);
+        smoothTowards(drift, 0.0f, dt, 0.5f);
+        m_velocity = heading * ahead + side * drift;
+        glm::vec2 xz = glm::vec2(m_position.x, m_position.z) + m_velocity * dt;
+        collide(xz, yaw, helm, waves, time);
+        position = glm::vec3(xz.x, 0.0f, xz.y);
     } else {
-        // Naive: advance the Bezier parameter at a constant rate (same average speed). The boat now
-        // speeds up where control points are spread out and slows down where they bunch up.
-        m_u = std::fmod(m_u + speed * dt / (course.length() / segments), segments);
-        m_distance = course.parameterToDistance(m_u);
+        if (m_wasFreeSailing) {
+            // Back onto the course, at the sampled point nearest to the boat (a one-off search).
+            float nearest = std::numeric_limits<float>::max();
+            for (int k = 0; k < 1000; ++k) {
+                const float u = segments * static_cast<float>(k) / 1000.0f;
+                const glm::vec3 p = course.evaluate(u);
+                const float d = glm::distance(glm::vec2(p.x, p.z), glm::vec2(m_position.x, m_position.z));
+                if (d < nearest) {
+                    nearest = d;
+                    m_u = u;
+                }
+            }
+            m_distance = course.parameterToDistance(m_u);
+        }
+        if (toggles.constantSpeed) {
+            // Advance the arc length and look up the matching parameter: equal distance per second.
+            m_distance = std::fmod(m_distance + speed * dt, course.length());
+            m_u = course.distanceToParameter(m_distance);
+        } else {
+            // Naive: advance the Bezier parameter at a constant rate (same average speed). The boat now
+            // speeds up where control points are spread out and slows down where they bunch up.
+            m_u = std::fmod(m_u + speed * dt / (course.length() / segments), segments);
+            m_distance = course.parameterToDistance(m_u);
+        }
+        position = course.evaluate(m_u);
+        const glm::vec3 tangent = course.tangent(m_u);
+        yaw = std::atan2(tangent.x, tangent.z);
     }
+    m_wasFreeSailing = freeSailing;
 
-    const glm::vec3 position = course.evaluate(m_u);
-    const glm::vec3 tangent = course.tangent(m_u);
-    const float yaw = std::atan2(tangent.x, tangent.z);
     if (!m_initialised) {
         m_position = position;
         m_yaw = yaw;
@@ -234,8 +280,11 @@ void Boat::update(float dt, float time, const FeatureToggles& toggles, const Bez
                                                      : (0.25f + 0.75f * toggles.windStrength) * glm::smoothstep(0.35f, 0.7f, m_windAngle);
     smoothTowards(m_billow, (m_boomAngle >= 0.0f ? -1.0f : 1.0f) * fullness, dt, 0.25f);
 
-    // ---- 6. Rudder follows the turn rate (blade to port turns the boat to port)
-    smoothTowards(m_rudderAngle, std::clamp(-3.0f * yawRate, -0.6f, 0.6f), dt, 0.3f);
+    // ---- 6. Rudder follows the turn rate (blade to port turns the boat to port). In free sailing the
+    // helm set it in step 1, and the turn followed from it.
+    if (!freeSailing)
+        smoothTowards(m_rudderAngle, std::clamp(-3.0f * yawRate, -0.6f, 0.6f), dt, 0.3f);
+
 
     // ---- 7. Write the animation matrices and update the hierarchy
     m_root->anim = translate(glm::vec3(position.x, m_heave, position.z)) * rotateY(yaw) * rotateX(m_pitch) * rotateZ(m_roll + m_heel);
@@ -255,3 +304,35 @@ void Boat::update(float dt, float time, const FeatureToggles& toggles, const Bez
     m_telemetry.rudderDeg = glm::degrees(m_rudderAngle);
     m_telemetry.sailWeight = m_billow;
 }
+
+
+// Free sailing: keeps the hull out of the obstacles and bounces it off them. The hull is two circles,
+// over its bow and stern halves; every obstacle is a circle in the water plane.
+void Boat::collide(glm::vec2& xz, float yaw, const Helm& helm, const Waves& waves, float time)
+{
+    const glm::vec2 heading(std::sin(yaw), std::cos(yaw));
+    for (const float along : { HullCircleOffset, -HullCircleOffset }) {
+        for (size_t i = 0; i < helm.obstacles.size(); ++i) {
+            const Obstacle& obstacle = helm.obstacles[i];
+            const glm::vec2 offset = xz + heading * along - obstacle.center;
+            const float distance = glm::length(offset);
+            const float overlap = HullCircleRadius + obstacle.radius - distance;
+            if (overlap <= 0.0f || distance < 1e-4f)
+                continue;
+            const glm::vec2 normal = offset / distance; // from the obstacle towards the boat
+            xz += normal * overlap; // push the boat out until the circles just touch
+            const float approach = -glm::dot(m_velocity, normal); // > 0: moving into it
+            if (approach <= 0.0f)
+                continue;
+            // Bounce: reverse the velocity component into the obstacle, keeping only part of it
+            // (restitution), and keep the component along its edge, so a glancing hit slides off.
+            m_velocity += (1.0f + Restitution) * approach * normal;
+            // Report real impacts only, not the boat being pressed against the obstacle by the sail.
+            if (approach > 0.3f && approach > m_contact.speed) {
+                const glm::vec2 edge = obstacle.center + normal * obstacle.radius;
+                m_contact = { .hit = true, .obstacle = i, .point = glm::vec3(edge.x, waves.heightAt(edge, time), edge.y), .normal = normal, .speed = approach };
+            }
+        }
+    }
+}
+
