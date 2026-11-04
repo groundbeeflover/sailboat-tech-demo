@@ -1,9 +1,9 @@
 # Track B — renderer review, decisions and report notes
 
-> Maintained as features are implemented. **B1 Bloom, B2 Lighthouse spotlight and B3 Minimap are implemented; B4 is not yet implemented.**
+> Maintained as features are implemented. **B1 Bloom, B2 Lighthouse spotlight and B3 Minimap were accepted by the teammates; B4 Crest Foam is implemented on a separate branch awaiting integrated review.**
 > A1+B1, and subsequently the B2 spotlight with its targeted shadow-caster fix, were confirmed
-> working by the user on their workstation (2026-11-04). B3 passed isolated OpenGL tests but
-> still needs branch-level visual testing on the full application before merging.
+> working by the user on their workstation (2026-11-04). B3 was also verified and merged
+> into V3 (A3+B3); B4 starts from that exact V3 `main` baseline.
 >
 > Do not copy the exact dates/owner percentages into the final report without confirming them
 > against the two group members' actual contributions.
@@ -388,9 +388,9 @@ fixed V2 baseline and leaves this logic untouched.**
 
 ## 4. B3 — Top-down render-to-texture minimap
 
-**Status (2026-11-04):** implemented on the uploaded V2 (A2+B2) project, in an isolated `B3`
-branch. Syntax, camera-projection and Mesa renderer tests passed; awaiting the teammates' real
-interactive app and merged-`main` checks. B3 does **not** alter Track A code or the B2 shadow fix.
+**Status (2026-11-04):** originally implemented on V2 and tested in isolation; the user
+subsequently verified B3 in the full application and merged it into V3 with A3. B3 does
+**not** alter Track A code or the B2 shadow fix.
 
 ### Goal and pipeline
 
@@ -489,11 +489,10 @@ Existing simulation: RenderLists + FrameContext + MinimapInputs (course center/r
   were rendered with the second camera. A sample pixel was **(254,26,38)** over the red box
   compared to **(12,42,82)** over the unobstructed water after removing the box. The screenshot
   overlay returned **(12,42,82)**, restored the 640×480 main viewport, and GL reported no errors.
-- **Limitations:** the *complete GLFW/ImGui application* has **not** run here because the
-  container lacks XRandR and GLU development headers. This means interactive resizing, window
-  placement, real-world navigation visibility and actual frame-rate impact must still be tested
-  by both project members before the B3 branch is merged. There are no actual full-app B3
-  screenshots in these notes; the commands below specify how to collect them.
+- **Limitations of the sandbox test:** the *complete GLFW/ImGui application* did not run
+  here because the environment lacks XRandR and GLU development headers. Interactive visual
+  checks were subsequently completed by the user before merging B3 into V3. Actual FPS
+  measurements and full-app B3 screenshots were not supplied; capture commands follow.
 
 ### How to test and capture B3
 
@@ -538,3 +537,181 @@ colour/depth attachments, framebuffer completeness, off-screen rendering, viewpo
 - **B4 Crest foam:** derive the Jacobian determinant of horizontal Gerstner displacement in the
   water vertex shader; vary foam with noisy breakup and wind intensity. Keep shader-side and CPU
   wave calculations consistent where needed.
+
+
+## 5. B4 — Gerstner crest foam (V3: A3+B3 baseline)
+
+**Status (2026-11-04):** B4 implemented on the V3 `main` baseline (`a1e8b61`) as an isolated
+patch. The modified C++ files passed syntax checks, and both new/modified shaders compiled and
+linked in a real Mesa OpenGL 4.5 Core context. A small GPU rasterisation test confirmed that
+foam disappears on flat water, appears under normal waves, becomes stronger with wave height,
+and can be switched on/off. **The complete GLFW/ImGui application and visual appearance on the
+teammates' Windows machines remain to be tested before merging B4.**
+
+### Purpose and derivation
+
+The goal from `docs/TODO.md` §B4 is to show irregular whitewater at the **compressed crests**
+of the existing Gerstner waves, becoming more visible at higher wind and wave height. A
+simple test on wave height (e.g., y above zero) would draw foam over every high part, regardless
+of whether the water was actually compressed. Instead we use the horizontal **Jacobian determinant**
+of the Gerstner displacement, a simplified form of the folding/compression diagnostic commonly
+used with choppy ocean surfaces (see the course plan's Tessendorf reference).
+
+For a wave with horizontal unit direction **D = (Dx,Dz)**, amplitude `A`, steepness `Q`,
+wavenumber `k`, phase angle `theta = k dot(D,p) - omega*time + phase`, its displaced horizontal
+position is
+
+```
+X = x + sum_i Q_i * A_i * Dx_i * cos(theta_i)
+Z = z + sum_i Q_i * A_i * Dz_i * cos(theta_i)
+```
+
+Differentiate **X,Z** with respect to the *undisplaced* coordinates **x,z**:
+
+```
+dX/dx = 1 - sum_i Q_i * A_i * k_i * Dx_i^2     * sin(theta_i)
+dZ/dz = 1 - sum_i Q_i * A_i * k_i * Dz_i^2     * sin(theta_i)
+dX/dz = dZ/dx
+      =   - sum_i Q_i * A_i * k_i * Dx_i * Dz_i * sin(theta_i)
+J = (dX/dx) * (dZ/dz) - (dX/dz)^2
+```
+
+`J=1` on an undeformed or calm surface, `J<1` means its horizontal patch is compressed,
+and `J<=0` would mean an actual fold. The amplitude/steepness numbers come **directly from
+`Waves::update()`** via existing `waveDirAmpK` / `waveOmegaPhaseQ` uniforms, so wind strength,
+wave count and `waveScale` influence foam without introducing a separate water simulation.
+In particular `Q*k*A` scales with `windStrength * waveScale` in this project; stronger winds
+create more compressed crests. The existing `src/waves.cpp` displacement and normal equations
+remain **unchanged**, preserving agreement between the drawn ocean and the floating boat.
+
+### Implementation and design choices
+
+1. **Analytic, single-pass vertex calculation.** In `shaders/water_vert.glsl`, the three
+   independent components of the 2×2 horizontal deformation gradient are accumulated **inside
+   the existing Gerstner loop**, sharing its sine, direction and wave parameters. Computing a
+   Jacobian from screen-space `dFdx`/`dFdy` would mix in the camera projection and mesh
+   tessellation; this is an actual derivative with respect to *rest-space water coordinates*.
+   No extra draw pass, mesh, CPU water simulation or texture allocation is required.
+2. **Soft threshold:** the vertex outputs
+   `fragFoam = 1 - smoothstep(foamThreshold - 0.16, foamThreshold, J)`.
+   The `smoothstep` avoids sharp on/off flicker as crest compression changes. Default
+   `foamThreshold=0.86` means foam appears only at relatively strong compression;
+   the Water UI exposes a 0.55–0.99 slider, with high thresholds producing more foam.
+   `Renderer::drawWater()` clamps the value to this range for malformed CLI input.
+3. **Break up the foam, do not create an unbroken white stripe.** `water_frag.glsl` samples the
+   already-present **tileable water detail normal map** twice at different world-space scales,
+   with a small wind-aligned scroll. The sampled red/green channels act as irregular coverage
+   noise; `smoothstep(0.34, 0.66, 0.55*n1 + 0.45*n2)` cuts gaps in the analytic crest mask.
+   The map remains bound even when detail normal *shading* is disabled, so the foam toggle is
+   independent of the normal-mapping toggle. Using **world-space `fragPosition.xz`** prevents
+   camera-following grid snaps from dragging the pattern around; scrolling allows mild foam
+   evolution without a simulation history buffer.
+4. **Lighting and compositing:** foam is treated as approximately diffuse whitewater, not a
+   reflective Fresnel/GGX surface. After the original water body, sky reflection, sun specular
+   and B2 lamp highlights, calculate foam radiance from ambient sky + shadowed directional
+   sunlight + any unoccluded lighthouse spotlight. Composite
+   `color = mix(color, foamColor * foamLight, foamMask)` **before distance fog**.
+   This stops white foam glowing uniformly at night and preserves the existing shadowing,
+   lighting, Bloom/HDR and fog passes. Water *does not start casting new shadows*.
+5. **Branch isolation, no Track A rewrites:** only `shaders/water_vert.glsl`,
+   `shaders/water_frag.glsl`, the two B-only renderer uniform lines in `src/renderer.cpp`,
+   and the B4 settings in `src/feature_toggles.h` / `src/application.cpp` are needed for the
+   feature. A3's new sail-blend code, A2's spray particles and the B2 spotlight-shadow fix
+   are preserved untouched. No new `.cpp` or shader file needs to be added to CMake.
+6. **Minimap:** the existing minimap pass reuses `Renderer::drawWater()`, so it inherits B4
+   automatically. It continues using its own camera/targets and skipping expensive shadow
+   passes. At coarse minimap resolution some tiny streaks may disappear by undersampling.
+
+**Alternative approaches considered:** a height cutoff would mistake high but uncompressed
+swell for breaking water; an independent animated white noise mask would not reliably follow
+crests; a temporal advect/decay foam simulation would look more realistic but require tracking
+world-space foam persistence and ping-pong GPU storage across frames, beyond B4's scope.
+This is a **stylised instantaneous foam cue**, not a fluid-breaking or foam-advection model.
+A further trade-off is that `fragFoam` is interpolated across the water mesh; far from the
+camera the increasingly coarse grid can smooth away thin crests. We have not measured a
+full-app frame-rate impact yet.
+
+### Files changed
+
+| File | Reason |
+|---|---|
+| `shaders/water_vert.glsl` | Compute the analytic horizontal Gerstner Jacobian in the existing wave loop and pass a soft foam mask. |
+| `shaders/water_frag.glsl` | Break up the mask with two normal-map samples and apply ambient, sun and spotlight lighting before fog. |
+| `src/renderer.cpp` | Pass `useFoam` and bounded `foamThreshold` to water shader for both main and minimap render calls. |
+| `src/feature_toggles.h` | Add `foam` and `foamThreshold` configuration fields. |
+| `src/application.cpp` | Water panel checkbox/slider and `--set foam=...`, `--set foamThreshold=...` for repeatable comparisons. |
+| `README.md`, `docs/TODO.md`, `docs/ARCHITECTURE.md`, this file | Instructions, feature status, maths, trade-offs, verification and report draft. |
+
+### Reproducible verification performed
+
+- `g++ -std=c++20 -fsyntax-only` succeeded for `src/application.cpp`, `src/renderer.cpp` and
+  `src/waves.cpp` using the vendored include files. A **temporary external shim** for missing
+  system `GL/glu.h` was used for this syntax check only; no project source or dependencies
+  were changed for it.
+- Actual `water_vert.glsl` + `water_frag.glsl` (GLSL `#version 410`) compiled and linked on
+  **Mesa 25.0.7, OpenGL 4.5 Core**, using a surfaceless EGL context. A second diagnostic
+  fragment shader was linked with the *same B4 water vertex shader* to read `fragFoam`.
+- A 240×240-cell test ocean grid spanning ±60 m was rendered into a 128×128 RGBA16F FBO.
+  It used the same six-wavelength Gerstner spectrum and default wind strength `0.6` as
+  `src/waves.cpp`, with `foamThreshold=0.86` and a synthetic RG ripple-texture sample for
+  coverage noise. **Diagnostic mean foam mask** at wave height `0`, `1`, `2` was respectively
+  **0.0000**, **0.0205**, **0.1199**. Pixels with mask above `0.1` were respectively
+  **0.0%**, **5.0%**, **18.7%**.
+- Running the actual fragment shader with foam *off/on* changed mean linear RGB by
+  **0.0000 / 0.0102 / 0.0610** for wave height `0 / 1 / 2` in the same view and lighting.
+  Flat water showed no difference and greater height produced stronger foam. Raising
+  `foamThreshold` from `0.70` to `0.96` increased the HDR output. No GL errors were reported.
+- These are **isolated GPU regression tests**, not screenshots or performance claims about
+  the assembled sailboat app. The app cannot be fully built in this Linux test container
+  because native XRandR/GLU development headers are absent.
+
+### Branch-level test plan and report screenshots (Windows)
+
+Start from the V3 `main` merge commit containing A3+B3. Apply the B4 patch on a feature branch
+(`B4` or `B4. Crest Foam`), build, and expand **Water** in the UI.
+
+Check: foam toggles off/on independently; wave height **0** and `waves=0` produce no foam; wave
+height **1 vs 2** visibly differs; wind strength 0 vs 1 changes the effect; threshold increases
+coverage; detail normal mapping off does not disable foam; sun/spot shadow toggles and the B3
+minimap continue working. Compare calm/rough water and day/night, and confirm there is no
+unexpected colour seam when the camera moves. Check GPU FPS with B4 on/off before claiming
+performance costs.
+
+The capture arguments below fix the time, wind and frame count. Turn off minimap to isolate the
+water effect; keep all other flags equal between paired screenshots. Use a camera angle where
+waves are clearly visible (Orbit or Chase), preferably with `--time 15.5` daylight.
+
+```powershell
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b4_off.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set foam=0 --set waveScale=2 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b4_on.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set foam=1 --set foamThreshold=0.86 --set waveScale=2 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b4_default_waves.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set foam=1 --set foamThreshold=0.86 --set waveScale=1 --set bloom=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b4_flat_water.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set foam=1 --set waveScale=0 --set bloom=0
+```
+
+`--capture` omits ImGui, so take an **interactive** screenshot with the Water panel expanded
+if the final report needs to demonstrate the controls. These images have **not** been captured
+in the sandbox and should not be represented as completed report screenshots.
+
+### Draft B4 report passage
+
+> We added foam to the Gerstner ocean by measuring compression in the wave's horizontal
+> displacement. The water vertex shader analytically accumulates the 2×2 horizontal
+> deformation gradient while calculating the same Gerstner waves used by the boat's
+> buoyancy simulation. The determinant of this matrix, `J`, measures local surface-area
+> compression: `J=1` on flat water and lower values indicate converging crests. We map
+> this quantity to foam coverage using a tunable smooth threshold, then modulate it with
+> two scrolling samples of our existing tileable ripple-normal texture to prevent solid
+> white stripes. The foam is shaded using ambient skylight, shadowed sunlight and the
+> lighthouse light, and blended with the HDR water colour before fog and tone mapping.
+> This shader-only technique makes foam respond to wind and wave-height changes at low
+> implementation complexity without changing the waves, buoyancy or render targets.
+> It is an instantaneous stylised effect: it does not simulate how foam persists,
+> drifts or decays after a wave breaks.
+
+**References:** `docs/TODO.md` §B4 (the project-proposed Jacobian foam method), the
+course-provided `final_project.html` (additional graphical technique, togglable UI),
+`src/waves.cpp` / `src/waves.h` (existing wave parameters and normal), and the existing
+`docs/ARCHITECTURE.md` §7 wave equations. For context, see Jerry Tessendorf,
+*Simulating Ocean Water* (2001), and Mark Finch, *Effective Water Simulation from Physical
+Models* (GPU Gems chapter 1, 2004). We implemented the per-vertex Gerstner Jacobian
+approach above; we did **not** implement Tessendorf's FFT ocean or foam advection.

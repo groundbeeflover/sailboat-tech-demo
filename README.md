@@ -16,6 +16,13 @@ ninja -C build
 
 Keys: `1`–`4` cameras, `C` curve, `Space` pause, `P` screenshot. Orbit camera: drag + scroll.
 
+B4 crest foam: in **Water**, enable **Crest foam (B4)** and adjust **Foam compression threshold**
+(default 0.86; increasing it creates foam on less compressed crests). The wave vertex shader
+uses the determinant of horizontal Gerstner displacement to identify crest compression, while
+water's existing tileable ripple texture breaks up the foam in the fragment shader. `--set foam=0/1`
+and `--set foamThreshold=0.86` support reproducible comparisons. No new C++ sources,
+textures or render passes are needed; existing shader files are rebuilt automatically.
+
 B3 minimap: enable **Show minimap** in the panel to display a movable, top-down ImGui map
 with a bright boat-heading marker. **Map resolution (px)** adjusts size (128–512), and
 **Heading up** rotates the map so the boat points toward the top. The `--set` equivalents are

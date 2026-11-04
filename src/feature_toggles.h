@@ -82,4 +82,8 @@ struct FeatureToggles {
     bool minimap { true };
     int minimapSize { 256 }; // square render texture and image size in pixels, 128..512
     bool minimapFollowsHeading { false }; // otherwise matches the existing course top view (-Z up)
+
+    // B4: foam at horizontally compressed Gerstner crests (Jacobian below threshold).
+    bool foam { true };
+    float foamThreshold { 0.86f }; // 0.55..0.99; higher = more foam at gentler crests
 };

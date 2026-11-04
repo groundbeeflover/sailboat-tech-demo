@@ -69,6 +69,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
         { "spotlight", &t.spotlight }, { "spotShadows", &t.spotShadows }, { "showSpotShadowMap", &t.showSpotShadowMap },
         { "minimap", &t.minimap }, { "minimapFollowsHeading", &t.minimapFollowsHeading },
+        { "foam", &t.foam },
 
     };
     const std::pair<const char*, float*> floats[] = {
@@ -82,7 +83,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
 
         // Track B parameters:
         { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
-        { "spotBias", &t.spotBias },
+        { "spotBias", &t.spotBias }, { "foamThreshold", &t.foamThreshold },
 
     };
     const std::pair<const char*, int*> ints[] = {
@@ -328,6 +329,11 @@ private:
             ImGui::SliderInt("Wave count", &t.waveCount, 1, Waves::MaxWaves);
             ImGui::SliderFloat("Wave height", &t.waveScale, 0.0f, 2.0f);
             ImGui::Checkbox("Detail normal map", &t.waterDetailNormals);
+            ImGui::Checkbox("Crest foam (B4)", &t.foam);
+            if (t.foam) {
+                ImGui::SliderFloat("Foam compression threshold", &t.foamThreshold, 0.55f, 0.99f, "%.2f");
+                ImGui::TextDisabled("Higher threshold = foam on gentler wave crests");
+            }
             ImGui::Checkbox("Wireframe", &t.waterWireframe);
         }
     }

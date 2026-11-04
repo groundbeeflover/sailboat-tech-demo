@@ -8,6 +8,7 @@
 DISABLE_WARNINGS_PUSH()
 #include <glm/gtc/matrix_inverse.hpp>
 DISABLE_WARNINGS_POP()
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -387,6 +388,8 @@ void Renderer::drawWater(const FrameContext& frame, Water& water, const Waves& w
     uniform::set("time", frame.time);
     uniform::set("gridOffset", water.gridOffset(frame.camera.position));
     uniform::set("windDirection", waves.mainDirection());
+    uniform::set("useFoam", toggles.foam);
+    uniform::set("foamThreshold", std::clamp(toggles.foamThreshold, 0.55f, 0.99f));
 
     uniform::set("useDetailNormals", toggles.waterDetailNormals);
     water.detailNormals().bind(GL_TEXTURE0);
