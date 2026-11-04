@@ -34,6 +34,7 @@ add_executable(Master_TechDemo
 
     # ---- Track B files (bloom, minimap, ...) ----
     "src/bloom.cpp"
+    "src/minimap.cpp"
 
 )
 

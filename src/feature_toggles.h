@@ -75,4 +75,9 @@ struct FeatureToggles {
     bool spotShadows { true };
     float spotBias { 0.00008f }; // projected *perspective* depth (not the sun's linear depth)
     bool showSpotShadowMap { false };
+
+    // B3: independent second camera with an ImGui texture view.
+    bool minimap { true };
+    int minimapSize { 256 }; // square render texture and image size in pixels, 128..512
+    bool minimapFollowsHeading { false }; // otherwise matches the existing course top view (-Z up)
 };

@@ -39,12 +39,14 @@ Renderer::Renderer()
     , m_skyboxShader(buildShader("skybox_vert.glsl", "skybox_frag.glsl"))
     , m_lineShader(buildShader("line_vert.glsl", "line_frag.glsl"))
     , m_postShader(buildShader("fullscreen_vert.glsl", "post_frag.glsl"))
+    , m_minimapOverlayShader(buildShader("fullscreen_vert.glsl", "minimap_overlay_frag.glsl"))
     , m_shadowShader(buildShader("shadow_vert.glsl", "shadow_frag.glsl")) // the starter code's depth-only shaders
     , m_depthDebugShader(buildShader("fullscreen_vert.glsl", "depth_debug_frag.glsl"))
     , m_spotDepthDebugShader(buildShader("fullscreen_vert.glsl", "spot_depth_debug_frag.glsl"))
 {
     m_shadowMap.resize(2048);
     m_spotShadowMap.resize(SpotShadowResolution);
+    m_minimap.resize(256); // create the stable ImGui texture ID before the first UI frame
 
     // Core profile needs some VAO bound even for draws that generate their vertices from gl_VertexID.
     glGenVertexArrays(1, &m_emptyVao);
@@ -96,11 +98,102 @@ void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water
     if (toggles.bloom)
         m_bloom.render(m_hdr.colorTexture(), frame.framebufferSize, toggles.bloomThreshold, toggles.bloomIterations, m_emptyVao);
 
-    tonemap(frame, toggles);
+    tonemap(m_hdr.colorTexture(), toggles.bloom ? m_bloom.texture() : m_hdr.colorTexture(),
+        0, frame.framebufferSize, toggles.bloom, toggles.showBloomBuffer, toggles.bloomIntensity, toggles.exposure);
     if (toggles.shadows && toggles.showShadowMap)
         drawShadowMapDebugView(frame);
     if (toggles.spotlight && frame.spot.enabled && toggles.spotShadows && toggles.showSpotShadowMap)
         drawSpotShadowMapDebugView(frame);
+}
+
+void Renderer::renderMinimap(const FrameContext& frame, const RenderLists& lists, Water& water,
+    const Waves& waves, const Sky& sky, const FeatureToggles& toggles, const MinimapInputs& inputs)
+{
+    if (!toggles.minimap)
+        return;
+
+    m_minimap.resize(toggles.minimapSize);
+    FrameContext mapFrame = frame;
+    mapFrame.camera = Minimap::camera(inputs, toggles.minimapFollowsHeading);
+    mapFrame.framebufferSize = glm::ivec2(m_minimap.side());
+
+    // Reuse the geometry/lighting passes, but not the expensive shadow-map construction, bloom,
+    // skybox or particle effects. These do not improve a navigation map at this small resolution.
+    FeatureToggles mapToggles = toggles;
+    mapToggles.shadows = false;
+    mapToggles.spotShadows = false;
+    mapToggles.fog = false;
+    mapToggles.waterWireframe = false;
+
+    m_minimap.bindHdr();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_CULL_FACE);
+    drawOpaque(mapFrame, lists.opaque, sky, mapToggles);
+    drawWater(mapFrame, water, waves, sky, mapToggles);
+    drawLines(mapFrame, lists.lines);
+
+    // A course-scale orthographic camera makes the boat only a few pixels wide. Draw a simple
+    // forward-pointing triangle above the scene so its position and heading remain readable.
+    const glm::vec3 forward(std::sin(inputs.boatYaw), 0.0f, std::cos(inputs.boatYaw));
+    const glm::vec3 right(std::cos(inputs.boatYaw), 0.0f, -std::sin(inputs.boatYaw));
+    const glm::vec3 origin = inputs.boatPosition + glm::vec3(0.0f, 27.0f, 0.0f);
+    LineBatch arrow;
+    arrow.mode = LineMode::Loop;
+    arrow.color = glm::vec3(3.0f, 0.7f, 0.15f);
+    arrow.points = { origin + forward * 8.0f,
+        origin - forward * 5.0f + right * 4.0f,
+        origin - forward * 5.0f - right * 4.0f };
+    LineBatch center;
+    center.mode = LineMode::Points;
+    center.color = glm::vec3(3.0f, 0.7f, 0.15f);
+    center.pointSize = 9.0f;
+    center.points = { origin };
+    drawLines(mapFrame, { arrow, center });
+
+    // Exactly the same ACES + gamma output transform as the main scene, but *no* bloom.
+    // The LDR RGBA8 texture is suitable for ImGui::Image without further colour conversion.
+    tonemap(m_minimap.hdrTexture(), m_minimap.hdrTexture(), m_minimap.displayFramebuffer(),
+        mapFrame.framebufferSize, false, false, 0.0f, toggles.exposure);
+
+    // The default framebuffer + main viewport must be active for ImGui and for screenshot capture.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, frame.framebufferSize.x, frame.framebufferSize.y);
+}
+
+void Renderer::drawMinimapCaptureOverlay(glm::ivec2 framebufferSize)
+{
+    // The normal interactive map lives in ImGui's movable window. Scripted captures read the
+    // scene *before* ImGui gets rendered, so show the identical already-tonemapped map as a
+    // top-right picture-in-picture here. The extra draw is only used by --capture and P shots.
+    const int padding = 16;
+    const int side = std::min(m_minimap.side(), std::min(framebufferSize.x, framebufferSize.y) - 2 * padding - 4);
+    if (side <= 0)
+        return;
+    const int x = framebufferSize.x - side - padding;
+    const int y = framebufferSize.y - side - padding;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_DEPTH_TEST);
+    // Narrow dark frame separates the water-coloured map from the main ocean view.
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x - 3, y - 3, side + 6, side + 6);
+    glClearColor(0.04f, 0.05f, 0.07f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+
+    glViewport(x, y, side, side);
+    m_minimapOverlayShader.bind();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_minimap.texture());
+    uniform::set("minimapColor", 0);
+    glBindVertexArray(m_emptyVao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glViewport(0, 0, framebufferSize.x, framebufferSize.y);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items, const FeatureToggles& toggles)
@@ -373,23 +466,24 @@ void Renderer::drawSkybox(const FrameContext& frame, const Sky& sky)
     glDepthFunc(GL_LESS);
 }
 
-void Renderer::tonemap(const FrameContext& frame, const FeatureToggles& toggles)
+void Renderer::tonemap(GLuint hdrColor, GLuint bloomColor, GLuint destinationFbo,
+    glm::ivec2 destinationSize, bool useBloom, bool showBloomBuffer, float bloomIntensity, float exposure)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, frame.framebufferSize.x, frame.framebufferSize.y);
+    glBindFramebuffer(GL_FRAMEBUFFER, destinationFbo);
+    glViewport(0, 0, destinationSize.x, destinationSize.y);
     glDisable(GL_DEPTH_TEST);
     m_postShader.bind();
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_hdr.colorTexture());
+    glBindTexture(GL_TEXTURE_2D, hdrColor);
     uniform::set("hdrColor", 0);
     // Keep unit 1 separate from the shadow-map comparison sampler used by scene passes.
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, toggles.bloom ? m_bloom.texture() : m_hdr.colorTexture());
+    glBindTexture(GL_TEXTURE_2D, bloomColor);
     uniform::set("bloomColor", 1);
-    uniform::set("useBloom", toggles.bloom);
-    uniform::set("showBloomBuffer", toggles.bloom && toggles.showBloomBuffer);
-    uniform::set("bloomIntensity", toggles.bloomIntensity);
-    uniform::set("exposure", toggles.exposure);
+    uniform::set("useBloom", useBloom);
+    uniform::set("showBloomBuffer", useBloom && showBloomBuffer);
+    uniform::set("bloomIntensity", bloomIntensity);
+    uniform::set("exposure", exposure);
     glBindVertexArray(m_emptyVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glEnable(GL_DEPTH_TEST);
