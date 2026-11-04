@@ -9,6 +9,11 @@ DISABLE_WARNINGS_POP()
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+
+namespace {
+constexpr float BuoyRadius = 0.7f; // widest point of the float
+}
 
 Course::Course()
 {
@@ -26,7 +31,7 @@ Course::Course()
         m_radius = std::max(m_radius, glm::length(a - m_center) + 20.0f);
 
     // Buoy: tapered float with a ball on top.
-    Mesh body = makeCylinder(0.7f, 0.45f, 1.3f);
+    Mesh body = makeCylinder(BuoyRadius, 0.45f, 1.3f);
     transformMesh(body, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.5f, 0.0f)));
     Mesh ball = makeSphere(0.45f);
     transformMesh(ball, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.85f, 0.0f)));
@@ -49,6 +54,17 @@ void Course::setTension(float tension)
         return;
     m_tension = tension;
     m_path = BezierPath::closedLoop(m_anchors, tension);
+}
+
+float Course::distanceTo(const glm::vec3& point) const
+{
+    const glm::vec2 p(point.x, point.z);
+    float nearest = std::numeric_limits<float>::max();
+    for (const glm::vec3& q : m_path.sample(64)) // ~2 m apart, plenty for a clearance check
+        nearest = std::min(nearest, glm::distance(p, glm::vec2(q.x, q.z)));
+    for (const glm::vec3& b : m_buoyPositions)
+        nearest = std::min(nearest, glm::distance(p, glm::vec2(b.x, b.z)) - BuoyRadius);
+    return nearest;
 }
 
 void Course::update(float time, const Waves& waves)

@@ -347,6 +347,9 @@ private:
             ImGui::Checkbox("Island", &t.island);
             ImGui::SliderFloat("Lighthouse speed (rad/s)", &t.lighthouseSpeed, 0.0f, 3.0f);
             ImGui::Text("lamp %s", m_island.lampOn() ? "on (night)" : "off (day)");
+            // The tension slider reshapes the path, so check it against the island's dry land live.
+            const float clearance = m_course.distanceTo(m_island.position()) - m_island.shoreRadius();
+            ImGui::Text("course clearance %.0f m%s", static_cast<double>(clearance), clearance < 0.0f ? " (crosses the island!)" : "");
         }
     }
 

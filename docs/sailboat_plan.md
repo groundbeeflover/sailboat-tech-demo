@@ -38,7 +38,7 @@ the sun and recolours the procedural sky that the water and the boat reflect.
 | 3 | Spray / wake particles at the bow, drifting with the wind | todo | |
 | 3 | Minimap: top camera into an FBO, shown with `ImGui::Image` | todo | |
 | 3 | Sail billow as blend shapes (flat ↔ full) instead of the current scale | todo | |
-| 3 | Island + lighthouse (procedural terrain, rotating lamp, spotlight) | todo | |
+| 3 | Island + lighthouse (procedural terrain, rotating lamp, spotlight) | done (the spotlight is drawn once B2 lands) | |
 | 3 | Crest foam, flag with animated texture, free-steering mode | todo | |
 
 The report's first page needs a percentage per member **per feature**: fill in the Owner column
