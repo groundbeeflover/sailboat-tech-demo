@@ -381,7 +381,7 @@ private:
                 ImGui::SliderFloat("Foam compression threshold", &t.foamThreshold, 0.55f, 0.99f, "%.2f");
                 ImGui::TextDisabled("Higher threshold = foam on gentler wave crests");
             }
-            ImGui::Checkbox("Temporal foam persistence (optional)", &t.temporalFoam);
+            ImGui::Checkbox("Temporal foam persistence", &t.temporalFoam);
             if (t.temporalFoam)
                 ImGui::SliderFloat("Foam lifetime (s)", &t.foamLifetime, 0.3f, 5.0f);
             ImGui::Checkbox("Wireframe", &t.waterWireframe);
@@ -513,7 +513,7 @@ private:
             ImGui::Checkbox("Spotlight shadows", &t.spotShadows);
             ImGui::SliderFloat("Spot depth bias", &t.spotBias, 0.0f, 0.0005f, "%.6f");
             ImGui::Checkbox("Show spot shadow map", &t.showSpotShadowMap);
-            ImGui::Checkbox("Visible light beam (optional)", &t.spotBeam);
+            ImGui::Checkbox("Visible light beam", &t.spotBeam);
             if (t.spotBeam)
                 ImGui::SliderFloat("Beam opacity", &t.spotBeamOpacity, 0.0f, 1.0f);
             ImGui::TextDisabled("Night: time 0-5 or 20-24. Compare light/shadows on and off.");
