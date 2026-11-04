@@ -1,4 +1,5 @@
 #include "procedural_texture.h"
+#include "noise.h"
 #include <framework/disable_all_warnings.h>
 DISABLE_WARNINGS_PUSH()
 #include <glm/common.hpp>
@@ -10,45 +11,6 @@ DISABLE_WARNINGS_POP()
 #include <cmath>
 
 namespace {
-
-// Integer hash -> [0, 1). Deterministic, so the textures look the same on every run.
-float random01(int x, int y, int seed)
-{
-    uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u + static_cast<uint32_t>(seed) * 2246822519u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    h ^= h >> 16;
-    return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0x1000000u);
-}
-
-int wrap(int i, int period) { return ((i % period) + period) % period; }
-
-// Value noise on an integer lattice that repeats every `period` cells, so textures tile seamlessly.
-float valueNoise(float x, float y, int periodX, int periodY, int seed)
-{
-    const int xi = static_cast<int>(std::floor(x));
-    const int yi = static_cast<int>(std::floor(y));
-    const float fx = x - static_cast<float>(xi);
-    const float fy = y - static_cast<float>(yi);
-    const float sx = fx * fx * (3.0f - 2.0f * fx);
-    const float sy = fy * fy * (3.0f - 2.0f * fy);
-    auto h = [&](int ix, int iy) { return random01(wrap(ix, periodX), wrap(iy, periodY), seed); };
-    const float a = glm::mix(h(xi, yi), h(xi + 1, yi), sx);
-    const float b = glm::mix(h(xi, yi + 1), h(xi + 1, yi + 1), sx);
-    return glm::mix(a, b, sy);
-}
-
-// Fractal sum of value noise; each octave doubles frequency and period, so tiling is preserved.
-float fbm(float x, float y, int periodX, int periodY, int octaves, int seed)
-{
-    float sum = 0.0f, amplitude = 0.5f, norm = 0.0f;
-    for (int o = 0; o < octaves; ++o) {
-        const int scale = 1 << o;
-        sum += amplitude * valueNoise(x * static_cast<float>(scale), y * static_cast<float>(scale), periodX * scale, periodY * scale, seed + o);
-        norm += amplitude;
-        amplitude *= 0.5f;
-    }
-    return sum / norm;
-}
 
 ImageRGBA makeImage(int width, int height)
 {
@@ -213,4 +175,69 @@ ImageRGBA generateWaterNormals(int size)
         }
     }
     return normalsFromHeight(height, size, size, 12.0f);
+}
+
+MaterialImages generateTerrain(const TerrainSamples& terrain, int size)
+{
+    MaterialImages out { makeImage(size, size), {}, makeImage(size, size) };
+    std::vector<float> bumps(static_cast<size_t>(size) * static_cast<size_t>(size)); // metres, for the normal map
+    const int last = terrain.resolution - 1;
+
+    const glm::vec3 drySand(0.78f, 0.71f, 0.56f), wetSand(0.46f, 0.41f, 0.32f);
+    const glm::vec3 grassLush(0.27f, 0.38f, 0.14f), grassDry(0.52f, 0.51f, 0.27f);
+    const glm::vec3 rockLight(0.50f, 0.47f, 0.42f), rockDark(0.24f, 0.22f, 0.20f), lichen(0.47f, 0.47f, 0.32f);
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(size);
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
+
+            // Bilinear lookup in the sample grid, which is much coarser than the texture.
+            const float gx = u * static_cast<float>(last), gy = v * static_cast<float>(last);
+            const int i = std::min(static_cast<int>(gx), last - 1), j = std::min(static_cast<int>(gy), last - 1);
+            const float fx = gx - static_cast<float>(i), fy = gy - static_cast<float>(j);
+            auto at = [&](int di, int dj) { return static_cast<size_t>(j + dj) * static_cast<size_t>(terrain.resolution) + static_cast<size_t>(i + di); };
+            const float h = glm::mix(glm::mix(terrain.height[at(0, 0)], terrain.height[at(1, 0)], fx), glm::mix(terrain.height[at(0, 1)], terrain.height[at(1, 1)], fx), fy);
+            const glm::vec3 n = glm::normalize(glm::mix(glm::mix(terrain.normal[at(0, 0)], terrain.normal[at(1, 0)], fx), glm::mix(terrain.normal[at(0, 1)], terrain.normal[at(1, 1)], fx), fy));
+            if (h < -2.5f) {
+                // Deeper than any wave trough, and the water is opaque: never seen, so skip the noise
+                // there (more than half of the texture).
+                setPixel(out.albedo, x, y, wetSand);
+                setPixel(out.roughness, x, y, glm::vec3(0.9f));
+                continue; // bumps stay 0
+            }
+
+            // Noise in metres: ~10 m patches shift the borders and dry out the grass, ~1 m grain speckles everything.
+            const float px = u * terrain.size, pz = v * terrain.size;
+            const float patches = fbm(px / 9.0f, pz / 9.0f, 64, 64, 3, 301);
+            const float grain = fbm(px / 0.7f, pz / 0.7f, 256, 256, 3, 302);
+
+            // Material weights. slope = 1 - n.y: 0 on flat ground, 0.13 at 30 degrees, 0.22 at 39 degrees.
+            const float slope = 1.0f - n.y;
+            const float rock = glm::smoothstep(0.13f, 0.22f, slope + 0.1f * (patches - 0.5f));
+            const float sand = 1.0f - glm::smoothstep(0.8f, 1.8f, h + 2.0f * (patches - 0.5f));
+            const float wet = 1.0f - glm::smoothstep(0.0f, 0.5f, h); // the waves wash up to about here
+
+            // Rock layers follow the contour lines, so on a cliff they read as strata; the noise in
+            // the phase keeps them from looking like a contour map. Seen from above, a steep face gets
+            // few texels, so the (x, z) noise stretches down it; the layers depend on the height
+            // instead and don't, so steep faces use mostly layers. Lichen in patches.
+            const float strata = 0.5f + 0.5f * std::sin(h * 2.3f + 7.0f * patches);
+            const float layered = glm::smoothstep(0.3f, 0.6f, slope);
+            const glm::vec3 bareRock = glm::mix(rockDark, rockLight, glm::mix(0.3f * strata + 0.7f * grain, 0.8f * strata + 0.2f * grain, layered));
+            const glm::vec3 rockColor = glm::mix(bareRock, lichen * (0.8f + 0.4f * grain), 0.35f * glm::smoothstep(0.55f, 0.7f, patches));
+            const glm::vec3 grassColor = glm::mix(grassLush, grassDry, glm::smoothstep(0.35f, 0.65f, patches)) * (0.85f + 0.3f * grain);
+            const glm::vec3 sandColor = glm::mix(drySand, wetSand, wet) * (0.92f + 0.16f * grain);
+            setPixel(out.albedo, x, y, glm::mix(glm::mix(grassColor, sandColor, sand), rockColor, rock));
+
+            const float groundRoughness = glm::mix(0.9f, glm::mix(0.95f, 0.4f, wet), sand); // wet sand is shiny
+            setPixel(out.roughness, x, y, glm::vec3(glm::mix(groundRoughness, 0.65f + 0.25f * grain, rock)));
+
+            // Boulder-sized bumps on rock, fine grain elsewhere.
+            const float rockBumps = rock > 0.0f ? fbm(px / 1.5f, pz / 1.5f, 128, 128, 4, 303) : 0.0f;
+            bumps[static_cast<size_t>(y) * static_cast<size_t>(size) + static_cast<size_t>(x)] = glm::mix(0.04f * grain, 0.35f * rockBumps, rock);
+        }
+    }
+    // strength = pixels per metre, so height differences in metres become slopes.
+    out.normal = normalsFromHeight(bumps, size, size, static_cast<float>(size) / terrain.size);
+    return out;
 }

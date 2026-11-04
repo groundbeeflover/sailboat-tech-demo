@@ -24,6 +24,9 @@ public:
     SceneNode& root() { return *m_root; }
     glm::vec3 center() const { return m_center; }
     float radius() const { return m_radius; }
+    // Smallest horizontal distance from a point to the path or the edge of a buoy, e.g. to check
+    // that something placed inside the loop stays clear of the course.
+    float distanceTo(const glm::vec3& point) const;
 
     void appendLines(std::vector<LineBatch>& out, const FeatureToggles& toggles, const Waves& waves, float time) const;
 

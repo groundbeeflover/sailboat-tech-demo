@@ -2,6 +2,7 @@
 #include "camera.h"
 #include "course.h"
 #include "feature_toggles.h"
+#include "island.h"
 #include "renderer.h"
 #include "sky.h"
 #include "water.h"
@@ -60,6 +61,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadows", &t.shadows }, { "showShadowMap", &t.showShadowMap }, { "dayNightCycle", &t.dayNightCycle },
 
         // Track A toggles:
+        { "island", &t.island },
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
@@ -71,6 +73,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadowExtent", &t.shadowExtent }, { "timeOfDay", &t.timeOfDay }, { "exposure", &t.exposure },
 
         // Track A parameters:
+        { "lighthouseSpeed", &t.lighthouseSpeed },
 
         // Track B parameters:
         { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
@@ -175,8 +178,8 @@ public:
                 // Halfway up the mast, so the light box holds the whole rig.
                 .shadowCenter = m_boat.coursePosition() + glm::vec3(0.0f, 4.0f, 0.0f),
             };
-            // ---- Track A: provide the spotlight here once a light source exists, e.g.
-            //      frame.spot = m_island.lampLight();
+            // ---- Track A: provide the spotlight here
+            frame.spot = m_island.lampLight();
 
             RenderLists lists;
             m_boat.root().collect(lists.opaque);
@@ -185,8 +188,8 @@ public:
             if (m_toggles.camera == CameraMode::Top) // the boat is only a few pixels on the map, so mark it
                 lists.lines.push_back({ .points = { m_boat.coursePosition() + glm::vec3(0.0f, 2.0f, 0.0f) }, .mode = LineMode::Points, .color = glm::vec3(3.0f, 0.2f, 0.1f), .pointSize = 14.0f });
             // ---- Track A: add your scene content here, e.g.
-            //      m_island.root().collect(lists.opaque);
             //      lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
+            m_island.root().collect(lists.opaque);
 
             m_renderer.render(frame, lists, m_water, m_waves, m_sky, m_toggles);
 
@@ -217,6 +220,7 @@ private:
         m_boat.update(dt, m_time, m_toggles, m_course.path(), m_waves);
 
         // ---- Track A systems update here (island, particles, flag, ...) ----
+        m_island.update(dt, m_toggles, m_lighting);
 
         // ---- Track B per-frame updates here (if any) ----
     }
@@ -238,6 +242,7 @@ private:
         skyUi();
 
         // ---- Track A feature panels (one call per feature) ----
+        islandUi();
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
@@ -339,6 +344,19 @@ private:
 
     // ---- Track A feature panel methods ----
 
+    void islandUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Island and lighthouse")) {
+            ImGui::Checkbox("Island", &t.island);
+            ImGui::SliderFloat("Lighthouse speed (rad/s)", &t.lighthouseSpeed, 0.0f, 3.0f);
+            ImGui::Text("lamp %s", m_island.lampOn() ? "on (night)" : "off (day)");
+            // The tension slider reshapes the path, so check it against the island's dry land live.
+            const float clearance = m_course.distanceTo(m_island.position()) - m_island.shoreRadius();
+            ImGui::Text("course clearance %.0f m%s", static_cast<double>(clearance), clearance < 0.0f ? " (crosses the island!)" : "");
+        }
+    }
+
     // ---- Track B feature panel methods ----
     void bloomUi()
     {
@@ -419,6 +437,7 @@ private:
     Lighting m_lighting;
 
     // ---- Track A members (Island, ParticleSystem, ...) ----
+    Island m_island { m_course.center() }; // declared after m_course, so the centre is already known
 
     // ---- Track B members (if any) ----
 

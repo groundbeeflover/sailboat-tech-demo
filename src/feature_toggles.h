@@ -58,6 +58,8 @@ struct FeatureToggles {
     float exposure { 1.0f };
 
     // ---- Track A features (island, particles, sail blend shapes, flag, free sailing) ----
+    bool island { true };
+    float lighthouseSpeed { 0.6f }; // lamp rotation, rad/s (about 10 s per turn)
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
     bool bloom { true };

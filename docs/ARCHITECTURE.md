@@ -54,7 +54,7 @@ Reproducible screenshots without a window (fixed 1/60 s time step):
 | Normal mapping | Per-vertex tangents (Lengyel) in an extra VBO, TBN in the shader; scrolling ripple normals on the water | [mesh.cpp](../src/mesh.cpp), [pbr_frag.glsl](../shaders/pbr_frag.glsl), [water_frag.glsl](../shaders/water_frag.glsl) | Shading → Normal mapping, Water → Detail normal map |
 | Environment mapping | Procedural sky rendered into a cubemap; skybox, Fresnel reflections on the water, image-based light on the boat | [sky.cpp](../src/sky.cpp), [sky_frag.glsl](../shaders/sky_frag.glsl) | Shading → Environment map / Skybox |
 | Smooth paths (≥ 3 cubic Béziers) | Closed C1 course of 5 cubic segments; curve and control polygon drawn optionally | [bezier.cpp](../src/bezier.cpp), [course.cpp](../src/course.cpp) | Boat and course → Show Bezier curve / control polygon |
-| Hierarchical transformations | Boat → hull → mast → boom → sail, rudder → tiller, wind vane, deck camera; built and animated in code | [boat.cpp](../src/boat.cpp), [scene_node.cpp](../src/scene_node.cpp) | (always on; wind/pause change it) |
+| Hierarchical transformations | Boat → hull → mast → boom → sail, rudder → tiller, wind vane, deck camera; a second tree for the island: lighthouse → tower → gallery → lamp house → turning lamp; built and animated in code | [boat.cpp](../src/boat.cpp), [island.cpp](../src/island.cpp), [scene_node.cpp](../src/scene_node.cpp) | (always on; wind/pause change it) |
 
 ### Extras done
 
@@ -67,6 +67,7 @@ Reproducible screenshots without a window (fixed 1/60 s time step):
 | Changing lighting (day-night) | Sun path, sunset colours, moonlight, stars; sky cubemap re-rendered when the sun moves | Sky and light → Time of day, Day-night cycle |
 | Shadows (one light) | Sun/moon shadow map, PCF, slope-scaled bias, texel snapping, edge fade, debug view | Shadows → … |
 | HDR + tone mapping | RGBA16F scene target, ACES filmic curve, exposure (prepares bloom) | Sky and light → Exposure |
+| Island + lighthouse | fBm height field with a radial falloff (bays, cliffs, a levelled plateau), normals from central differences; sand/grass/rock maps baked from height and slope; lighthouse hierarchy whose lamp turns, glows at night and is exposed as a `SpotLight` | Island and lighthouse → Island, Lighthouse speed |
 
 ---
 
@@ -94,11 +95,13 @@ flowchart LR
         Waves["Waves<br/>waves.*"]
         Cameras["Cameras<br/>camera.*"]
         Light["computeLighting()<br/>sky.*"]
+        Island["Island<br/>island.*"]
     end
 
     subgraph Assets["Generated assets (startup)"]
         PMesh["procedural_mesh.*"]
         PTex["procedural_texture.*"]
+        Noise["noise.h"]
     end
 
     subgraph GPU["Rendering (OpenGL 4.1)"]
@@ -115,13 +118,15 @@ flowchart LR
     CLI --> Toggles
     Toggles -.read by.-> Sim
     Toggles -.read by.-> Renderer
-    Application --> Course & Boat & Waves & Cameras & Light & Sky & Water & Renderer
+    Application --> Course & Boat & Island & Waves & Cameras & Light & Sky & Water & Renderer
     Course --> Bezier
     Course --> Scene
     Boat --> Scene
     Boat -.samples.-> Waves
     Course -.samples.-> Waves
     Boat --> PMesh & PTex
+    Island --> Scene & PMesh & PTex & Noise
+    PTex --> Noise
     Water --> PTex
     PMesh --> GPUMesh
     PTex --> GPUMesh
@@ -139,6 +144,7 @@ flowchart LR
 | `bezier.*` | `CubicBezier`, `BezierPath` (closed C1 loop, arc-length table) |
 | `course.*` | Anchor points, the path, buoys, debug lines for curve and control polygon |
 | `boat.*` | Boat meshes, materials, node tree, per-frame motion and animation |
+| `island.*` | Island terrain (fBm height field → mesh + baked maps), lighthouse node tree, lamp animation, `lampLight()` |
 | `scene_node.*` | Transformation hierarchy: `world = parent.world · rest · anim` |
 | `waves.*` | Gerstner wave set, CPU displacement/normal/height query |
 | `water.*` | Camera-following grid mesh + ripple normal texture |
@@ -148,7 +154,8 @@ flowchart LR
 | `bloom.*` | B1: half-resolution highlight extraction + ping-pong separable Gaussian blur |
 | `shadow_map.*` | `ShadowMap` (depth texture with compare mode), `directionalLightMatrix()` |
 | `procedural_mesh.*` | Hull, deck, sail, box, cylinder, sphere, helpers |
-| `procedural_texture.*` | Plank/strake/ripple textures (pure CPU) |
+| `procedural_texture.*` | Plank/strake/ripple textures, terrain maps baked from a height field (pure CPU) |
+| `noise.h` | Value noise and fBm, shared by the textures and the terrain |
 | `mesh.*`, `texture.*` | Starter code, extended: tangent VBO, raw-pixel textures, sRGB, fixed move assignment |
 | `uniforms.h` | Silent uniform setters for the bound program |
 | `draw_item.h` | `PBRMaterial`, `DrawItem`, `LineBatch`, `ExtraPass`, `RenderLists`: what the scene hands to the renderer |
@@ -175,6 +182,7 @@ classDiagram
         -Boat m_boat
         -Cameras m_cameras
         -Lighting m_lighting
+        -Island m_island
         -float m_time
         +run() void
         -update(dt) void
@@ -225,6 +233,23 @@ classDiagram
         +appendLines(out, toggles, waves, time) void
         +center() vec3
         +radius() float
+        +distanceTo(point) float
+    }
+
+    class Island {
+        -vector~unique_ptr~GPUMesh~~ m_meshes
+        -vector~unique_ptr~Texture~~ m_textures
+        -PBRMaterial m_terrainMaterial, m_lampMaterial ...
+        -unique_ptr~SceneNode~ m_root
+        -SceneNode* m_lamp
+        -float m_shoreRadius, m_beamTilt
+        -float m_lampAngle, m_night
+        +update(dt, toggles, lighting) void
+        +root() SceneNode&
+        +lampLight() SpotLight
+        +lampOn() bool
+        +position() vec3
+        +shoreRadius() float
     }
 
     class BezierPath {
@@ -320,10 +345,12 @@ classDiagram
     Application *-- Course
     Application *-- Waves
     Application *-- Cameras
+    Application *-- Island
     Course *-- BezierPath
     BezierPath *-- "5" CubicBezier
     Course *-- SceneNode : buoys
     Boat *-- SceneNode : boat tree
+    Island *-- SceneNode : island tree
     Boat *-- HullShape
     SceneNode *-- SceneNode : children
     Waves *-- "0..8" GerstnerWave
@@ -579,6 +606,7 @@ sequenceDiagram
     participant Waves
     participant Course
     participant Boat
+    participant Island
     participant Cams as Cameras
     participant R as Renderer
 
@@ -586,18 +614,20 @@ sequenceDiagram
     App->>App: dt = clamp(now - previous, 0.1) (fixed 1/60 when capturing)
     App->>App: drawUi() writes FeatureToggles
     rect rgb(235, 245, 255)
-    note over App,Boat: update(dt)
+    note over App,Island: update(dt)
     App->>App: timeOfDay += 24 dt / dayLength (if cycling)
     App->>App: lighting = computeLighting(timeOfDay)
     App->>Sky: update(sunDirection) (re-renders cubemap only if the sun moved)
     App->>Waves: update(dt, wind, strength, count, scale, enabled)
     App->>Course: setTension(), update(time, waves) (buoys bob)
     App->>Boat: update(dt, time, toggles, path, waves)
+    App->>Island: update(dt, toggles, lighting) (lamp turns, glows at night)
     end
     App->>Cams: update(mode, CameraInputs from boat + course)
     Cams-->>App: CameraView
     App->>Boat: root().collect(lists.opaque)
     App->>Course: root().collect(lists.opaque), appendLines(lists.lines)
+    App->>Island: root().collect(lists.opaque), frame.spot = lampLight()
     note over App: Track A slot: more collect() calls, lists.transparent passes, frame.spot
     App->>R: render(FrameContext, RenderLists, water, waves, sky, toggles)
     opt screenshot requested or capture finished
@@ -795,6 +825,10 @@ flowchart TD
 - Hull 1024 × 512: lapstrake height profile (sawtooth per strake) → strong normal-map lines; red
   antifouling below v = 0.5, cream boot stripe, varnished mahogany above.
 - Water ripples 256²: sum of sines with integer wave vectors (tile exactly) + fBm.
+- Terrain 1024², one map over the whole island seen from above: sand below ~1.8 m (wet and shiny at
+  the waterline), grass on gentle slopes, layered rock from ~30–39°, borders moved by ~10 m noise.
+  A steep face gets few texels from above, so its colour comes mostly from height-based layers,
+  which don't stretch. Texels deeper than 2.5 m skip the noise (the opaque water hides them).
 - Colour maps are uploaded as sRGB (`GL_SRGB8_ALPHA8`) so the shader receives linear values.
 
 ### 7.8 Renderer, targets and texture units
@@ -867,6 +901,43 @@ Added so the two of us can build features in parallel without editing each other
 Every shared file has `// ---- Track A …` and `// ---- Track B …` comment slots, so your additions land
 in different places and git merges them without conflicts.
 
+### 7.13 Island and lighthouse ([island.cpp](../src/island.cpp))
+
+- **Terrain**: 192 × 192 cells over 120 m, `h = mix(−5 m, A · fbm(p) + B, falloff(r))` with
+  `falloff = 1 − smoothstep(start, 1, r)`: the relief in the middle blends into a flat seabed, and the
+  coast is wherever h crosses 0. Low-frequency noise scales r (bays, headlands) and moves `start`
+  (late = short drop = cliff, early = long slope down to a beach). A 5 m plateau is levelled for the
+  lighthouse. Normals from central differences of h.
+- **Materials**: one `PBRMaterial` with the maps from `generateTerrain()` (7.7), so the shared PBR shader
+  lights, fogs and shadows it without changes.
+- **Water**: nothing to do. The terrain is opaque and drawn first, the water after it with depth testing,
+  so the waterline (moving with the waves) comes from the depth buffer.
+- **Course**: dry land reaches 52.5 m from the centre and the path or a buoy comes no closer than 94.8 m
+  (any tension), so at least 42 m clear; the Island panel shows the clearance live (`Course::distanceTo`).
+- **Lamp**: `update()` integrates the angle from `lighthouseSpeed · dt` (no jump when the slider moves),
+  fades the HDR emission in from sunset (bloom picks it up), then calls `updateWorld()`. `lampLight()`
+  takes the position from the Lamp's world matrix and the direction from its +z axis, tilted down so the
+  beam reaches the water 110 m out, where the course is. It fills `frame.spot` every frame.
+- **Shadows**: the sun's shadow box follows the boat, so the island (≥ 50 m away) gets none.
+
+```mermaid
+flowchart TD
+    Island["Island (no mesh)<br/>rest = T(course centre)"]
+    Terrain["Terrain: 193² height field<br/>rest = I"]
+    Lighthouse["Lighthouse (no mesh)<br/>rest = T(0, plateau − 0.2, 0)"]
+    Tower["Tower: 3 white bands, 16 m<br/>tapers 2.0 → 1.4 m"]
+    Bands["Bands: 3 red bands"]
+    Gallery["Gallery: disc<br/>rest = T(0, 16, 0)"]
+    LampHouse["LampHouse: 6 posts + roof<br/>rest = T(0, 0.35, 0)"]
+    Lamp["Lamp: emissive box<br/>rest = T(0, 1, 0)<br/>anim = Ry(angle)"]
+
+    Island --> Terrain & Lighthouse
+    Lighthouse --> Tower
+    Tower --> Bands & Gallery
+    Gallery --> LampHouse
+    LampHouse --> Lamp
+```
+
 ---
 
 ## 8. Conventions and gotchas
@@ -886,6 +957,10 @@ in different places and git merges them without conflicts.
 - Only one shadowed light (the brief's extra asks for multiple).
 - B1 bloom is integrated and GPU-tested in isolation; full-scene screenshots are still pending.
   Implementation rationale and validation details: [TRACK_B_IMPLEMENTATION_NOTES.md](TRACK_B_IMPLEMENTATION_NOTES.md).
+- The island is outside the sun's shadow box (it follows the boat), so it neither receives nor casts
+  shadows; cascades (TODO.md B-stretch) would fix it.
+- Steep terrain faces use the top-down projection of the baked maps. Height-based rock layers hide most
+  of the stretching; triplanar mapping would remove it, but needs a terrain shader.
 - The sail's back side gets no direct light (no translucency).
 - Stars are cubemap cells and look slightly square close up.
 - The water does not self-shadow; no foam yet.
