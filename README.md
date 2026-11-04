@@ -26,6 +26,7 @@ Scripted screenshots (no window):
 - [docs/TODO.md](docs/TODO.md) — remaining features with step-by-step guides, split into two parallel
   tracks, git workflow, report/video checklist.
 - [docs/sailboat_plan.md](docs/sailboat_plan.md) — concept, feature owners, report notes and references.
+- [docs/TRACK_B_IMPLEMENTATION_NOTES.md](docs/TRACK_B_IMPLEMENTATION_NOTES.md) — Track B feature log, design decisions, validation and report drafts.
 
 ## Hand-in reminder
 

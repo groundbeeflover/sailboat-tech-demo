@@ -30,6 +30,7 @@ add_executable(Master_TechDemo
     # ---- Track A files (island, particles, flag, ...) ----
 
     # ---- Track B files (bloom, minimap, ...) ----
+    "src/bloom.cpp"
 
 )
 

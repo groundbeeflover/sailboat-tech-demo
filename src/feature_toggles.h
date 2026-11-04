@@ -60,4 +60,9 @@ struct FeatureToggles {
     // ---- Track A features (island, particles, sail blend shapes, flag, free sailing) ----
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
+    bool bloom { true };
+    float bloomThreshold { 1.5f }; // HDR scene brightness, before exposure
+    float bloomIntensity { 0.6f }; // added in linear HDR, before tone mapping
+    int bloomIterations { 4 }; // horizontal + vertical Gaussian pass pairs, 1..6
+    bool showBloomBuffer { false }; // inspect the blurred highlights in place of the scene
 };

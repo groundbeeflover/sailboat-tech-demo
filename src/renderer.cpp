@@ -84,6 +84,9 @@ void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water
     if (toggles.skybox && !frame.camera.orthographic)
         drawSkybox(frame, sky);
 
+    if (toggles.bloom)
+        m_bloom.render(m_hdr.colorTexture(), frame.framebufferSize, toggles.bloomThreshold, toggles.bloomIterations, m_emptyVao);
+
     tonemap(frame, toggles);
     if (toggles.shadows && toggles.showShadowMap)
         drawShadowMapDebugView(frame);
@@ -310,6 +313,13 @@ void Renderer::tonemap(const FrameContext& frame, const FeatureToggles& toggles)
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, m_hdr.colorTexture());
     uniform::set("hdrColor", 0);
+    // Keep unit 1 separate from the shadow-map comparison sampler used by scene passes.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, toggles.bloom ? m_bloom.texture() : m_hdr.colorTexture());
+    uniform::set("bloomColor", 1);
+    uniform::set("useBloom", toggles.bloom);
+    uniform::set("showBloomBuffer", toggles.bloom && toggles.showBloomBuffer);
+    uniform::set("bloomIntensity", toggles.bloomIntensity);
     uniform::set("exposure", toggles.exposure);
     glBindVertexArray(m_emptyVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);

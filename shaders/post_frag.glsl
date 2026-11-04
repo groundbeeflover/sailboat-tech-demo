@@ -1,10 +1,14 @@
 #version 410
 
-// Final pass: HDR scene colour -> exposure -> ACES filmic tone curve -> sRGB gamma.
-// Bloom will be added here (bright pass + blur, then add before tone mapping).
+// Final pass: linear HDR scene + optional blurred highlights -> exposure -> ACES -> gamma.
+// Bloom must be added before tone mapping, while the values are still HDR.
 
 in vec2 fragUV;
 uniform sampler2D hdrColor;
+uniform sampler2D bloomColor;
+uniform bool useBloom;
+uniform bool showBloomBuffer;
+uniform float bloomIntensity;
 uniform float exposure;
 out vec4 fragColor;
 
@@ -17,7 +21,12 @@ vec3 acesFilm(vec3 x)
 
 void main()
 {
-    vec3 hdr = texture(hdrColor, fragUV).rgb * exposure;
+    vec3 hdr = texture(hdrColor, fragUV).rgb;
+    if (useBloom) {
+        vec3 highlights = texture(bloomColor, fragUV).rgb;
+        hdr = showBloomBuffer ? highlights : hdr + bloomIntensity * highlights;
+    }
+    hdr *= exposure;
     vec3 ldr = acesFilm(hdr);
     fragColor = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
 }

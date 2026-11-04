@@ -62,6 +62,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track A toggles:
 
         // Track B toggles:
+        { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
 
     };
     const std::pair<const char*, float*> floats[] = {
@@ -72,6 +73,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track A parameters:
 
         // Track B parameters:
+        { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
 
     };
     const std::pair<const char*, int*> ints[] = {
@@ -80,6 +82,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track A parameters:
 
         // Track B parameters:
+        { "bloomIterations", &t.bloomIterations },
 
     };
     for (const auto& [key, field] : bools) {
@@ -237,6 +240,7 @@ private:
         // ---- Track A feature panels (one call per feature) ----
 
         // ---- Track B feature panels (one call per feature) ----
+        bloomUi();
 
         if (ImGui::Button("Save screenshot (P)"))
             m_screenshotRequested = true;
@@ -336,6 +340,18 @@ private:
     // ---- Track A feature panel methods ----
 
     // ---- Track B feature panel methods ----
+    void bloomUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Bloom (HDR post-processing)")) {
+            ImGui::Checkbox("Bloom enabled", &t.bloom);
+            ImGui::SliderFloat("Brightness threshold", &t.bloomThreshold, 0.5f, 5.0f, "%.2f");
+            ImGui::SliderFloat("Bloom intensity", &t.bloomIntensity, 0.0f, 2.0f, "%.2f");
+            ImGui::SliderInt("Blur iterations", &t.bloomIterations, 1, 6);
+            ImGui::Checkbox("Show bloom buffer only", &t.showBloomBuffer);
+            ImGui::TextDisabled("Try time 17.5 h: sun disk and glitter path.");
+        }
+    }
 
     void onKeyPressed(int key)
     {

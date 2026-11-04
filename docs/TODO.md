@@ -130,6 +130,8 @@ The rendered output is byte-identical to before B0 (checked with captures).
 
 ### B1. Bloom (~2.5 h)
 
+**Implementation:** done (2026-11-04). See [Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md) for exact changes, algorithms and test results. Full-scene screenshots and end-to-end build still pending.
+
 **Goal:** bright HDR parts (sun glints, sun disk, later the lighthouse lamp) bleed light into their
 surroundings. The scene is already rendered to an RGBA16F target, so values above 1 survive.
 

@@ -145,6 +145,7 @@ flowchart LR
 | `sky.*` | `computeLighting(hours)`, procedural sky → cubemap |
 | `renderer.*` | All passes: shadow → opaque → water → lines → skybox → tonemap → shadow-map view |
 | `framebuffer.*` | `HdrTarget` (RGBA16F colour + depth) |
+| `bloom.*` | B1: half-resolution highlight extraction + ping-pong separable Gaussian blur |
 | `shadow_map.*` | `ShadowMap` (depth texture with compare mode), `directionalLightMatrix()` |
 | `procedural_mesh.*` | Hull, deck, sail, box, cylinder, sphere, helpers |
 | `procedural_texture.*` | Plank/strake/ripple textures (pure CPU) |
@@ -344,6 +345,7 @@ classDiagram
         -Shader m_lineShader, m_postShader
         -Shader m_shadowShader, m_depthDebugShader
         -HdrTarget m_hdr
+        -BloomPass m_bloom
         -ShadowMap m_shadowMap
         -mat4 m_lightSpace
         +render(frame, lists, water, waves, sky, toggles) void
@@ -415,6 +417,13 @@ classDiagram
         +colorTexture() GLuint
     }
 
+    class BloomPass {
+        -Shader m_brightShader, m_blurShader
+        -GLuint[2] m_fbo, m_color
+        +render(hdrColor, frameSize, threshold, iterations, fullscreenVao) void
+        +texture() GLuint
+    }
+
     class ShadowMap {
         -GLuint m_fbo, m_depth
         -int m_resolution
@@ -462,6 +471,7 @@ classDiagram
     }
 
     Renderer *-- HdrTarget
+    Renderer *-- BloomPass
     Renderer *-- ShadowMap
     Renderer ..> FrameContext
     Renderer ..> RenderLists
@@ -653,7 +663,13 @@ sequenceDiagram
     opt skybox on and not orthographic
         R->>HDR: drawSkybox: fullscreen triangle at depth 1, LEQUAL
     end
-    R->>GPU: tonemap: exposure → ACES → gamma
+    opt toggles.bloom
+        R->>R: bloom: soft-knee HDR bright pass at half resolution
+        loop 1..6 iterations
+            R->>R: 5-fetch Gaussian horizontal / vertical ping-pong
+        end
+    end
+    R->>GPU: composite HDR + bloom → exposure → ACES → gamma
     opt show shadow map
         R->>GPU: drawShadowMapDebugView (compare mode off while sampling)
     end
@@ -791,7 +807,8 @@ flowchart TD
 | Lines | `HdrTarget` | `line_vert/frag` | round points via `gl_PointCoord` |
 | Extra transparent passes | `HdrTarget` | the feature's own | `RenderLists::transparent`; blending on, depth writes off |
 | Skybox | `HdrTarget` | `skybox_vert/frag` | depth 1, `GL_LEQUAL`, skipped in top view |
-| Tonemap | default framebuffer | `fullscreen_vert` + `post_frag` | exposure → ACES → gamma 2.2 |
+| Bloom (optional) | 2× half-res RGBA16F FBOs | `bloom_bright_frag`, `bloom_blur_frag` | soft bright pass, 5-fetch separable 9-tap Gaussian, 1–6 iterations |
+| Tonemap | default framebuffer | `fullscreen_vert` + `post_frag` | HDR scene + optional bloom → exposure → ACES → gamma 2.2 |
 | Shadow-map view | default framebuffer corner | `fullscreen_vert` + `depth_debug_frag` | compare mode off while drawing |
 | Sky cubemap | cubemap faces (on change) | `fullscreen_vert` + `sky_frag` | in `Sky::update` |
 
@@ -802,6 +819,9 @@ flowchart TD
 | 2 | roughness map | – |
 | 3 | environment cubemap | environment cubemap |
 | 4 | shadow map (`sampler2DShadow`) | shadow map |
+
+Post-processing uses scene HDR on texture unit 0 and optional bloom on unit 1; these are
+separate shader programs, so they do not conflict with the scene-pass sampler bindings.
 
 Uniforms are set with `uniform::set(name, value)` ([uniforms.h](../src/uniforms.h)), which stays silent for
 uniforms the driver optimised away.
@@ -864,6 +884,8 @@ in different places and git merges them without conflicts.
 ## 9. Known limitations
 
 - Only one shadowed light (the brief's extra asks for multiple).
+- B1 bloom is integrated and GPU-tested in isolation; full-scene screenshots are still pending.
+  Implementation rationale and validation details: [TRACK_B_IMPLEMENTATION_NOTES.md](TRACK_B_IMPLEMENTATION_NOTES.md).
 - The sail's back side gets no direct light (no translucency).
 - Stars are cubemap cells and look slightly square close up.
 - The water does not self-shadow; no foam yet.

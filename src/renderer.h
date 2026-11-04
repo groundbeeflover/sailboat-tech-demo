@@ -1,4 +1,5 @@
 #pragma once
+#include "bloom.h"
 #include "camera.h"
 #include "draw_item.h"
 #include "feature_toggles.h"
@@ -68,6 +69,7 @@ private:
     Shader m_depthDebugShader;
 
     HdrTarget m_hdr;
+    BloomPass m_bloom; // optional half-res HDR highlights, composited before ACES
     ShadowMap m_shadowMap;
     glm::mat4 m_lightSpace { 1.0f };
     GLuint m_emptyVao { 0 };
