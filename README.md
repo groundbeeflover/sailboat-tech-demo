@@ -16,6 +16,13 @@ ninja -C build
 
 Keys: `1`–`4` cameras, `C` curve, `Space` pause, `P` screenshot. Orbit camera: drag + scroll.
 
+B3 minimap: enable **Show minimap** in the panel to display a movable, top-down ImGui map
+with a bright boat-heading marker. **Map resolution (px)** adjusts size (128–512), and
+**Heading up** rotates the map so the boat points toward the top. The `--set` equivalents are
+`minimap=0/1`, `minimapSize=256` and `minimapFollowsHeading=0/1`. Scripted
+`--capture` screenshots include a small map overlay when `minimap=1`, because ImGui draws later.
+Re-run CMake after updating: B3 adds `src/minimap.cpp` and `shaders/minimap_overlay_frag.glsl`.
+
 Scripted screenshots (no window):
 `./build/Master_TechDemo --capture out.png --frames 400 --camera orbit --time 17.6 --set shadows=0`
 

@@ -14,7 +14,7 @@ All 7 minimal requirements are done. Everything below is extras, polish and hand
 | | Track A: world and simulation | Track B: render pipeline |
 |---|---|---|
 | Mindset | New things in the scene, CPU logic, their own meshes/shaders | New passes, post-processing, lighting models |
-| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom (**done**), B2 Spotlight + second shadow map (**implemented; visual review pending**), B3 Minimap, B4 Crest foam (B0 interface: **done**) |
+| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom (**done**), B2 Spotlight + second shadow map (**done; targeted self-occlusion fix tested**), B3 Minimap (**implemented in B3 branch; visual review pending**), B4 Crest foam (B0 interface: **done**) |
 | Owns files | `island.*`, `particles.*`, `flag.*`, `boat.*`, `course.*`, `procedural_*`, `waves.*`, `particle_*.glsl`, `terrain_*.glsl` | `renderer.*`, `bloom.*`, `minimap.*`, `lights.h`, `shadow_map.*`, `framebuffer.*`, `sky.*`, `pbr_*.glsl`, `water_*.glsl`, `post_frag.glsl`, `bloom_*.glsl` |
 | Rough hours | ≈ 12–14 | ≈ 11–13 |
 
@@ -166,8 +166,9 @@ Avoid "everything glows": the sky must not exceed the threshold except the sun d
 
 ### B2. Spotlight with its own shadow map (~3.5 h): "shadows for multiple light sources"
 
-**Implementation:** B2 complete in the Track B branch (2026-11-04), awaiting the teammate's
-branch-level and merged-`main` visual checks. See
+**Implementation:** B2 merged and tested on V2 (A2+B2). The user corrected the emitting
+lamp's self-occlusion in the spotlight shadow map; see the B2 fix addendum in the Track B notes.
+See
 [Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md#3-b2-lighthouse-spotlight-and-second-shadow-map)
 for exact design, synthetic OpenGL validation, report material and capture commands. A1's
 `frame.spot = m_island.lampLight()` is already merged; no placeholder lamp was needed.
@@ -201,6 +202,11 @@ Then `renderer.*`, both scene shaders, toggles (`spotlight`, `spotShadows`, `spo
 differently, and the cost: one more depth pass of the boat only.
 
 ### B3. Minimap (~2 h)
+
+**Implementation:** B3 code completed on the V2 baseline (2026-11-04). Independent camera,
+HDR/LDR framebuffer rendering, ImGui window, heading marker/orientation and capture overlay are
+implemented. Source checks and synthetic real OpenGL tests passed; the full application needs
+branch-level visual review before merging. See `TRACK_B_IMPLEMENTATION_NOTES.md` §4.
 
 **Goal:** a small top-down picture-in-picture, rendered from a second camera into a texture.
 

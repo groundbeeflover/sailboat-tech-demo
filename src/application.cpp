@@ -23,6 +23,7 @@ DISABLE_WARNINGS_POP()
 #include <framework/window.h>
 #include <algorithm>
 #include <cstring>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <iostream>
@@ -68,6 +69,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
         { "spotlight", &t.spotlight }, { "spotShadows", &t.spotShadows }, { "showSpotShadowMap", &t.showSpotShadowMap },
+        { "minimap", &t.minimap }, { "minimapFollowsHeading", &t.minimapFollowsHeading },
 
     };
     const std::pair<const char*, float*> floats[] = {
@@ -90,7 +92,7 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track A parameters:
 
         // Track B parameters:
-        { "bloomIterations", &t.bloomIterations },
+        { "bloomIterations", &t.bloomIterations }, { "minimapSize", &t.minimapSize },
 
     };
     for (const auto& [key, field] : bools) {
@@ -130,6 +132,8 @@ public:
             if (!applySetting(m_toggles, setting))
                 std::cerr << "Unknown setting: " << setting << std::endl;
         }
+        // --set is intentionally generic; prevent invalid sizes from reaching ImGui::Image.
+        m_toggles.minimapSize = std::clamp(m_toggles.minimapSize, 128, 512);
 
         m_window.registerKeyCallback([this](int key, int /* scancode */, int action, int /* mods */) {
             if (action == GLFW_PRESS)
@@ -200,8 +204,17 @@ public:
 
 
             m_renderer.render(frame, lists, m_water, m_waves, m_sky, m_toggles);
+            // ---- Track B: B3 runs a second camera pass into a texture for the minimap window.
+            m_renderer.renderMinimap(frame, lists, m_water, m_waves, m_sky, m_toggles,
+                MinimapInputs { m_boat.coursePosition(), m_boat.yaw(), m_course.center(), m_course.radius() });
 
-            // Screenshots are read before ImGui draws on top, so they show the scene only.
+            // The existing screenshot path reads before ImGui. For captures, composite the same
+            // minimap texture on screen so B3 is visible in reproducible on/off report images.
+            if ((capturing || m_screenshotRequested) && m_toggles.minimap)
+                m_renderer.drawMinimapCaptureOverlay(framebufferSize);
+
+            // Screenshots are read before ImGui draws on top, so they show the scene only
+            // (plus the B3 picture-in-picture overlay if enabled).
             if (m_screenshotRequested) {
                 saveScreenshot(timestampedScreenshotPath());
                 m_screenshotRequested = false;
@@ -260,10 +273,13 @@ private:
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
         spotlightUi();
+        minimapUi();
 
         if (ImGui::Button("Save screenshot (P)"))
             m_screenshotRequested = true;
         ImGui::End();
+        // Separate picture-in-picture ImGui window, not part of the 3D camera's viewport.
+        drawMinimapWindow();
     }
 
     void viewpointUi()
@@ -405,6 +421,34 @@ private:
             ImGui::Checkbox("Show spot shadow map", &t.showSpotShadowMap);
             ImGui::TextDisabled("Night: time 0-5 or 20-24. Compare light/shadows on and off.");
         }
+    }
+
+    void minimapUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Minimap (second camera)")) {
+            ImGui::Checkbox("Show minimap", &t.minimap);
+            ImGui::SliderInt("Map resolution (px)", &t.minimapSize, 128, 512);
+            ImGui::Checkbox("Heading up", &t.minimapFollowsHeading);
+            ImGui::TextDisabled("Top-down course view; orange arrow = boat heading.");
+        }
+    }
+
+    void drawMinimapWindow()
+    {
+        if (!m_toggles.minimap)
+            return;
+        // First-use position is to the right of the primary controls; the window remains movable.
+        const float x = std::max(5.0f, ImGui::GetIO().DisplaySize.x - static_cast<float>(m_toggles.minimapSize) - 35.0f);
+        ImGui::SetNextWindowPos(ImVec2(x, 20.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Minimap", &m_toggles.minimap, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted(m_toggles.minimapFollowsHeading ? "Heading up" : "Course overview (-Z up)");
+            // OpenGL textures start at the bottom; ImGui images start at the top.
+            ImGui::Image(reinterpret_cast<ImTextureID>(static_cast<intptr_t>(m_renderer.minimapTexture())),
+                ImVec2(static_cast<float>(m_toggles.minimapSize), static_cast<float>(m_toggles.minimapSize)),
+                ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
+        }
+        ImGui::End();
     }
 
     void onKeyPressed(int key)

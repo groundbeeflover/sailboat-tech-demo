@@ -5,6 +5,7 @@
 #include "feature_toggles.h"
 #include "framebuffer.h"
 #include "lights.h"
+#include "minimap.h"
 #include "shadow_map.h"
 #include "sky.h"
 #include <framework/disable_all_warnings.h>
@@ -46,6 +47,15 @@ public:
     // writes afterwards. A pass must not change the framebuffer or the viewport.
     void render(const FrameContext& frame, const RenderLists& lists, Water& water, const Waves& waves, const Sky& sky, const FeatureToggles& toggles);
 
+    // Render a second, orthographic view into an LDR texture consumed by ImGui. Does not touch
+    // the primary HDR target, rebuild the shadow maps, or update the main chase/orbit camera.
+    void renderMinimap(const FrameContext& frame, const RenderLists& lists, Water& water, const Waves& waves,
+        const Sky& sky, const FeatureToggles& toggles, const MinimapInputs& inputs);
+    GLuint minimapTexture() const { return m_minimap.texture(); }
+    // The existing --capture path reads scene pixels before ImGui draws. Composite the same map
+    // into the default framebuffer only for scripted screenshots, so report captures show B3.
+    void drawMinimapCaptureOverlay(glm::ivec2 framebufferSize);
+
     static constexpr float FogDistance = 260.0f; // metres at which fog reaches ~63%
     static constexpr float ShadowDepthRange = 30.0f; // metres in front of and behind the shadow centre
 
@@ -61,19 +71,22 @@ private:
     void drawLines(const FrameContext& frame, const std::vector<LineBatch>& lines);
     void drawTransparent(const FrameContext& frame, const std::vector<ExtraPass>& passes);
     void drawSkybox(const FrameContext& frame, const Sky& sky);
-    void tonemap(const FrameContext& frame, const FeatureToggles& toggles);
+    void tonemap(GLuint hdrColor, GLuint bloomColor, GLuint destinationFbo, glm::ivec2 destinationSize,
+        bool useBloom, bool showBloomBuffer, float bloomIntensity, float exposure);
 
     Shader m_pbrShader;
     Shader m_waterShader;
     Shader m_skyboxShader;
     Shader m_lineShader;
     Shader m_postShader;
+    Shader m_minimapOverlayShader;
     Shader m_shadowShader;
     Shader m_depthDebugShader;
     Shader m_spotDepthDebugShader;
 
     HdrTarget m_hdr;
     BloomPass m_bloom; // optional half-res HDR highlights, composited before ACES
+    Minimap m_minimap; // independent HDR-to-RGBA8 picture-in-picture view
     ShadowMap m_shadowMap;
     ShadowMap m_spotShadowMap; // fixed 1024x1024 depth-only FBO
     glm::mat4 m_lightSpace { 1.0f };

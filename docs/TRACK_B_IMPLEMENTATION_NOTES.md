@@ -1,8 +1,9 @@
 # Track B — renderer review, decisions and report notes
 
-> Maintained as features are implemented. **B1 Bloom and B2 Lighthouse spotlight are implemented; B3–B4 are not yet implemented.**
-> A1+B1 was reported working together by the user on their workstation (2026-11-04). B2 has
-> passed isolated validation but still needs an end-to-end application run and screenshots.
+> Maintained as features are implemented. **B1 Bloom, B2 Lighthouse spotlight and B3 Minimap are implemented; B4 is not yet implemented.**
+> A1+B1, and subsequently the B2 spotlight with its targeted shadow-caster fix, were confirmed
+> working by the user on their workstation (2026-11-04). B3 passed isolated OpenGL tests but
+> still needs branch-level visual testing on the full application before merging.
 >
 > Do not copy the exact dates/owner percentages into the final report without confirming them
 > against the two group members' actual contributions.
@@ -199,10 +200,10 @@ may make bloom visually subtle. Optionally repeat at night after A1/B2 bring the
 
 ## 3. B2 — Lighthouse spotlight and second shadow map
 
-**Status (2026-11-04):** implemented in an isolated B2 patch on the supplied A1+B1 baseline;
-C++ syntax checks and standalone real OpenGL validation passed. The complete Windows application
-and night-scene screenshots have **not** been tested here, so merge only after the branch-level
-visual check described below.
+**Status (2026-11-04):** implemented, merged with A2, then corrected after the user found
+lighthouse self-occlusion. The user tested the revised B2 on their workstation and confirmed that
+spotlight lighting and shadows now work together. The isolated C++/OpenGL tests described below
+pre-date the fix; their results should not be confused with full-scene validation.
 
 ### How it connects to A1 and B1
 
@@ -333,9 +334,10 @@ OpenGL resize. Observe frame time before and after enabling `spotShadows` at a f
   branch and shadow sampling. At a sample pixel, red HDR brightness was **0.00000** with the
   lamp off, **0.70361** with the lamp on/unshadowed, and **0.00000** when its shadow sampler was
   given a nearer occluder depth. `glGetError() == GL_NO_ERROR`.
-- This does **not** replace testing the complete course scene: the sandbox lacks the GLFW
-  XRandR/GLU development packages for the full application. No real app screenshots or measured
-  end-to-end frame-rate impact were produced, and real-world shadow bias may need tuning.
+- These isolated tests did not run the complete course scene: the sandbox lacked the GLFW
+  XRandR/GLU development packages. **Subsequently, the user ran B2 in the full application,
+  discovered the lamp self-occlusion problem and confirmed the targeted fix.** No quantitative
+  full-app performance measurements were provided.
 
 ### B2 report paragraph (adapt after visual testing)
 
@@ -358,9 +360,181 @@ for the depth rendering, bias, PCF and distinction between orthographic and pers
 [LearnOpenGL: Light Casters](https://learnopengl.com/Lighting/Light-casters) for smooth cone
 cutoffs and distance attenuation; course handout `final_project.html` and local `docs/TODO.md` B2.
 
-## 4. Upcoming Track B interfaces (not implemented in this change)
-- **B3 Minimap:** render a second camera to a colour target and display with ImGui. Reuse the
-  draw lists from Track A without requiring Track A renderer changes.
+### B2 integration fix — the emitting lamp was shadowing itself
+
+When the user enabled **Lighthouse light** and **Spotlight shadows** at the same time, the
+spotlight's contribution almost disappeared. This was **not** a light-intensity or shader-bias
+problem: the solid emitting lamp geometry had its origin at the spotlight's position. Its +Z
+extent was 0.65 m while the spotlight depth camera's near plane was 0.5 m, so the lamp's own
+front face was written near the beginning of the perspective depth map. Water and the boat beyond
+it then failed the comparison and appeared shadowed.
+
+The user supplied a detailed correction report (`LIGHTHOUSE_SPOTLIGHT_SHADOW_FIX_DETAILS.md` in
+the shared project exchange). The corrected **V2** source already contains the change:
+
+- `SceneNode::castsSpotShadow` defaults to `true`; `SceneNode::collect()` forwards it to
+  `DrawItem::castsSpotShadow`.
+- Only `m_lamp->castsSpotShadow = false` in `island.cpp` excludes the emitting box from its own
+  spotlight depth pass.
+- `Renderer::renderDepthItems(..., spotlightPass = true)` checks the flag only while rendering
+  the spotlight map. The regular sun/moon depth pass, normal PBR shading and the other lighthouse
+  parts remain intact.
+
+**Why this fix:** excluding just the luminous mesh corrects occluder selection without changing
+its light origin, cone, intensity or global bias (which would cause Peter-Panning). It preserves
+real shadows from the sail, hull, terrain and surrounding tower. The user confirmed the fixed
+application now works; this is the authoritative full-scene verification. **B3 starts from that
+fixed V2 baseline and leaves this logic untouched.**
+
+## 4. B3 — Top-down render-to-texture minimap
+
+**Status (2026-11-04):** implemented on the uploaded V2 (A2+B2) project, in an isolated `B3`
+branch. Syntax, camera-projection and Mesa renderer tests passed; awaiting the teammates' real
+interactive app and merged-`main` checks. B3 does **not** alter Track A code or the B2 shadow fix.
+
+### Goal and pipeline
+
+Provide a live picture-in-picture rendering from a **second camera**, not a cropped copy of the
+main scene. The map should show the entire course, island, boat location and heading regardless
+of whether the primary viewpoint is Chase, Deck, Orbit or Top.
+
+```text
+Existing simulation: RenderLists + FrameContext + MinimapInputs (course center/radius, boat pose)
+  |
+  +--> Normal camera: sun/spot depth passes -> main HDR RGBA16F -> Bloom -> ACES -> screen
+  |
+  +--> Minimap::camera(): independent top-down orthographic projection
+         -> separate 256x256 (adjustable 128..512) HDR RGBA16F + depth24 target
+         -> PBR opaque meshes + Gerstner water + course lines + heading arrow
+         -> reuse post_frag.glsl with bloom OFF, ACES + gamma
+         -> RGBA8 colour texture (own FBO, no depth needed in post pass)
+         -> movable ImGui::Image window (UV vertical flip)
+         -> for --capture only: unlit screen-space texture overlay in top-right
+```
+
+### Technical choices and justification
+
+1. **Actual re-render, not a crop:** `Renderer::renderMinimap()` reuses the same Track A
+   `RenderLists::opaque` and `lines` and the same PBR/water draw functions as the main scene.
+   The island coastline, animated water, sail and buoy geometry therefore respond to simulation
+   changes automatically. A downsampled screenshot of the main camera would not contain a
+   useful top-down navigation view.
+2. **Dedicated camera:** `Minimap::camera()` builds `glm::lookAt` from 500 m above the course
+   centre, with `glm::ortho(-r, r, -r, r, 1, 1200)` and `r=1.25 × courseRadius` (minimum 10 m).
+   This matches the original Top view scale but works independently of the active camera. We
+   intentionally do **not** call `Cameras::update()` a second time; that function updates the
+   main chase-camera smoothing state and would have introduced an unintended dependency.
+3. **Two orientation modes:** fixed course mode has world **−Z up**, consistent with the existing
+   Top camera. `minimapFollowsHeading=1` sets the top camera's up vector to
+   `(sin(boatYaw), 0, cos(boatYaw))`, making the boat's forward direction point upward. The view
+   remains centred on the course so the island and lap route stay in frame. This rotates the map
+   but does not switch the primary camera or alter boat motion.
+4. **Legible navigation marker:** at course scale the boat occupies only a handful of texels.
+   A bright orange triangle and circular point are drawn as regular `LineBatch` geometry above
+   the scene, with the tip aligned to the CPU boat yaw. Their world-space size makes direction
+   legible at all map resolutions; they are **only** added to the minimap draw, not the original
+   simulation data or normal camera.
+5. **A separate HDR scene target followed by LDR texture:** the project already shades in
+   linear HDR and applies exposure/ACES/gamma in `post_frag.glsl`. Rendering straight into RGBA8
+   would clip bright lamp/sky values and bypass the shared tone mapping. We reuse `HdrTarget` for
+   map colour and depth and generalise `Renderer::tonemap()` to choose its input and destination.
+   The second display FBO uses RGBA8 (low memory, suitable for ImGui). Only one new GL texture
+   is required for the final LDR image; its **name is stable across resizing**, because ImGui
+   records the texture ID before the render pass updates the storage in that same frame.
+6. **Deliberate pass simplification:** no additional sun or spotlight *depth rendering*, and
+   map shading disables shadow lookups, distance fog, the skybox, wireframe water and Bloom.
+   The map still uses lit PBR materials and real animated water for spatial recognition. We omit
+   particles/other extra transparent passes: a dense, overlapping spray effect would clutter a
+   256-pixel navigation view and duplicate relatively expensive draw work. The renderer restores
+   default framebuffer and full viewport after the map, so ImGui and capture work normally.
+7. **Every-frame update:** the map updates each frame for smooth heading/course movement and
+   simplicity. The small target reduces **fragment** cost but not all geometry/vertex cost:
+   duplicating scene draws is the principal performance trade-off. A later optimisation would
+   redraw every second frame or use simplified map-only geometry if real measurements show a
+   bottleneck. We do not claim an unmeasured FPS benefit.
+8. **Report capture support:** `Application::run()` takes scripted screenshots **before** the
+   ImGui backend draws. As a result `ImGui::Image()` is not in default `--capture` screenshots.
+   When a capture is requested, `drawMinimapCaptureOverlay()` copies the already-tone-mapped
+   RGBA8 texture to a top-right screen-space viewport with a small frame, using a separate
+   `minimap_overlay_frag.glsl` sampler (no second tone-map or gamma). Normal interactive use
+   retains the freely movable ImGui map window; this overlay runs **only** during screenshots.
+
+### Changed files and responsibilities
+
+| File | B3 changes |
+|---|---|
+| `src/minimap.h/.cpp` | Own orthographic camera maths, independent HDR target, stable GL_RGBA8 colour texture and display FBO; manage size and cleanup. |
+| `src/renderer.h/.cpp` | Reuse opaque/water/line passes with map camera; add marker, re-target existing ACES post pass and support a screenshot-only map overlay. |
+| `shaders/minimap_overlay_frag.glsl` | Copy already-tone-mapped map into the default framebuffer without changing its colours. |
+| `src/feature_toggles.h` | `minimap`, `minimapSize` (128..512, default 256), `minimapFollowsHeading`. |
+| `src/application.cpp` | Add UI controls, a separate movable ImGui map window, `--set` settings, a second render call and capture overlay condition. |
+| `CMakeLists.txt` | Add `src/minimap.cpp`; reconfigure to copy the new shader. |
+| `docs/TODO.md`, this file and `README.md` | Record the status, rationale, test coverage and usage. |
+
+### Verification performed
+
+- **Source checks:** `g++ -std=c++20 -fsyntax-only` passed for `src/minimap.cpp`,
+  `src/renderer.cpp` and `src/application.cpp`. A temporary local shim supplied the missing
+  system `GL/glu.h`; no project dependency was modified.
+- **Camera maths:** compiled tests of multiple boat yaw values (`0, 0.6, 1.5, 3.0` radians)
+  verified heading-up projects the boat's forward axis vertically upward with zero horizontal
+  drift. A fixed-orientation test verified −Z maps to screen-up; the course centre projects to
+  the image centre in both modes.
+- **Real OpenGL framebuffer test:** Mesa OpenGL 4.5 Core (surfaceless EGL) accepted both the
+  floating-point HDR+depth FBO and the RGBA8 FBO as complete. A filled HDR pixel read back as
+  red **3.0** without clipping, and RGBA8 clearing to (0.3, 0.6) returned byte values
+  **(76, 153)**. Resizing from 256 to 384 preserved the ImGui texture name and FBO completeness.
+- **Real OpenGL renderer test:** the actual renderer, sky, water, PBR, post, debug and new overlay
+  GLSL programs compiled/linked under Mesa. An emissive red box and Gerstner-water background
+  were rendered with the second camera. A sample pixel was **(254,26,38)** over the red box
+  compared to **(12,42,82)** over the unobstructed water after removing the box. The screenshot
+  overlay returned **(12,42,82)**, restored the 640×480 main viewport, and GL reported no errors.
+- **Limitations:** the *complete GLFW/ImGui application* has **not** run here because the
+  container lacks XRandR and GLU development headers. This means interactive resizing, window
+  placement, real-world navigation visibility and actual frame-rate impact must still be tested
+  by both project members before the B3 branch is merged. There are no actual full-app B3
+  screenshots in these notes; the commands below specify how to collect them.
+
+### How to test and capture B3
+
+Run a Debug/Release build and confirm: map toggles on/off, map window can move, resolution
+slider resizes the image without a blank frame, fixed −Z-up versus heading-up rotates correctly
+when the boat turns, the orange arrow agrees with the boat and the course/island stay visible.
+Check the primary camera and existing B1/B2 effects are unchanged, especially at 22:00 when the
+lighthouse is active. Try a small/large application window and compare performance with minimap
+on/off. **Report screenshot commands** (Windows example; `--set minimapSize=256` is optional):
+
+```powershell
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b3_minimap_off.png --frames 240 --camera chase --time 15.5 --set minimap=0
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b3_minimap_on.png --frames 240 --camera chase --time 15.5 --set minimap=1
+.\out\build\x64-Debug\Master_TechDemo.exe --capture screenshots/b3_heading_up.png --frames 240 --camera chase --time 15.5 --set minimap=1 --set minimapFollowsHeading=1 --set minimapSize=320
+```
+
+These captures include the map overlay but not other ImGui controls. Interactive screenshots
+(using an operating-system screenshot tool) can show the movable ImGui window and its controls.
+Do **not** claim these examples are screenshots already produced by the sandbox.
+
+### B3 draft report paragraph
+
+> We implemented a live minimap using a second, independent top-down **orthographic** camera
+> and render-to-texture framebuffers. The course is projected from above into a small HDR colour
+> and depth target, reusing the same PBR objects, procedural island, water and course lines as
+> the main camera. The map is tone-mapped with the existing ACES pass into a display-ready RGBA8
+> texture and shown in a movable ImGui window. A heading marker indicates the boat's orientation;
+> the user can switch from fixed course-up to boat-heading-up orientation. We skip redundant
+> shadow-map construction, Bloom, skybox and particles to limit the overhead of rendering the
+> scene twice, and we use a small image resolution. Re-rendering the scene is more expensive
+> than drawing a static 2D diagram, but it remains correct as the world animates and directly
+> demonstrates an additional camera and off-screen rendering technique. We also added a
+> capture-only overlay because the project's scripted screenshot path runs before ImGui.
+
+**References:** course handout `final_project.html` (Minimap extra effect), `docs/TODO.md` B3,
+[LearnOpenGL — Framebuffers](https://learnopengl.com/Advanced-OpenGL/Framebuffers) (texture
+colour/depth attachments, framebuffer completeness, off-screen rendering, viewport changes),
+`src/camera.cpp` (existing orthographic Top view) and `framework/third_party/imgui/include/imgui/imgui.h`
+(`ImGui::Image` UV/texture interface). See also GLM `glm::lookAt`/`glm::ortho` APIs.
+
+## 5. Upcoming Track B feature (not implemented in this change)
 - **B4 Crest foam:** derive the Jacobian determinant of horizontal Gerstner displacement in the
   water vertex shader; vary foam with noisy breakup and wind intensity. Keep shader-side and CPU
   wave calculations consistent where needed.
