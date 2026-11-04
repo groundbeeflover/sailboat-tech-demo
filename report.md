@@ -29,26 +29,32 @@ Track A adds five features to the scene. None of them changes the renderer. They
 ### A1 - Island and Lighthouse
 I placed an island with a lighthouse on top of it in the middle of the map. It adds a second object to the hierarchy next to the boat, and gives B2 a source to work with.The lamp in the lighthouse is turning constantly, fades in at dusk and fades out at dawn. At night, it glows via the bloom pass implemented in B1. Toggles: island, lighthouseSpeed.
 
-![The procedural island by day](images/report/a1_island_day.png)
+![The procedural island by day](<screenshots/Island and lighthouse/a1_island_day.png>)
 
 *Figure 1. The island by day: fBm relief with a radial falloff. Sand, grass and layered rock are
 chosen from height and slope.*
 
-![The lighthouse at dusk](images/report/a1_lighthouse_dusk.png)
+![The lighthouse at dusk](<screenshots/Island and lighthouse/a1_lighthouse_dusk.png>)
 
 *Figure 2. At dusk the lamp fades on. Its HDR emission feeds the bloom (B1), and its spotlight (B2)
+lights the water next to the boat.*
 
 The lighthouse is built in code as Island → {Terrain, Lighthouse → Tower (+ Bands) → Gallery → LampHouse → Lamp}. The lamp's animation matrix is R_y(θ). The angle θ is integrated from the speed slider, so moving the slider never makes the beam jump. lampLight() turns the Lamp node's world matrix into a spotlight: its position is world[3], and its direction is the lamp's +z axis, tilted down to reach the water where the boat goes when it is tied to the course. 
+
+![The beam sweeping the course, seen from above](<screenshots/Island and lighthouse/a1_beam_sweep_top.png>)
+
+*Figure 3. Top view at night, 1.5 s apart. The Lamp node turns, and the spotlight built from its world
+matrix sweeps round the course. The red dot is the boat.*
 
 We generate the terrain so it needs no external assets and can be shaped exactly around the course. Its shore radius is also the collision circle in A5. We bake the materials into textures instead of blending them per pixel in a separate terrain shader. That way the island uses the shared PBR shader unchanged, gets shadows, image-based lighting and normal mapping for free, and stays out of Track B's files. The cost is the top-down UV projection, which stretches the texture on the steepest cliffs. Triplanar mapping [3] would fix that, but it needs its own shader. The lamp is emissive, with an HDR colour well above the bloom threshold. It is left out of its own spot shadow map: the light sits inside the lamp box, whose faces would otherwise block the whole cone.
 
 ### A2 - Spray and Wake 
 Spray flies up from the bow and a foam wake trails behind the boat. More spray is thrown up when the boat is faster and when the bow hits the waves harder. The droplets drift with the wind and fall back into the sea. The foam floats on the waves and spreads out before it fades. A fixed pool of 4000 particles holds the 450–1500 that are usually alive. Toggles: particles, particleRate.
 
-![The beam sweeping the course, seen from above](<screenshots/Island and lighthouse/a1_beam_sweep_top.png>)
+![Bow spray and foam wake, with particles on and off](<screenshots/Spray and wake particles/a2_particles_on_off.png>)
 
-*Figure 3. Top view at night, 1.5 s apart. The Lamp node turns, and the spotlight built from its world
-matrix sweeps round the course. The red dot is the boat.*
+*Figure 4. The same moment with particles on (left) and off (right). B4's crest foam is switched off
+in both, so only the particles differ.*
 
 The two emitters are nodes without a mesh, Bow and Stern, in the boat's hierarchy, so they follow its heave, pitch and heel. To draw, the particles are sorted back to front and uploaded into one instance buffer. A single glDrawArraysInstanced call draws one quad per particle (glVertexAttribDivisor = 1). Spray quads face the camera, spanned by its right and up vectors while foam quads lie flat. The fragment shader draws a soft procedural puff with premultiplied alpha [5]. It lights the puff with wrapped diffuse light [6] and a forward-scattering lobe, so spray glows against a low sun. [4] is the classic reference for particle systems.
 
@@ -57,10 +63,10 @@ OpenGL 4.1, our limit on macOS, has no compute shaders. About a thousand particl
 ### A3 - Sail Blend Shapes 
 The sail fills with wind through a blend shape, which replaces the earlier trick of scaling the sail node in x. The base mesh is a flat triangle. The weight follows the wind strength, and its sign follows the side the boom is on, so the sail bulges to leeward on both tacks. The weight is smoothed over time, so during a tack or jibe the sail goes through flat to the other side instead of flipping. Toggles: sailShapeOverride and sailShapeWeight set the fullness by hand.
 
-![Bow spray and foam wake, with particles on and off](<screenshots/Spray and wake particles/a2_particles_on_off.png>)
+![The sail at blend weights 0, 0.5 and 1](<screenshots/Sail blend shapes/a3_weights_edge_on.png>)
 
-*Figure 4. The same moment with particles on (left) and off (right). B4's crest foam is switched off
-in both, so only the particles differ.*
+*Figure 5. The sail seen almost edge-on at weights 0, 0.5 and 1. At 0 it is a flat sliver; at 0.5 and
+1 the blend shape gives it camber and twist.*
 
 Both shapes come from one generator, so they have identical topology. A second GPUMesh constructor uploads the base mesh as usual. It also uploads the per-vertex differences (target − base, for positions and normals) as two extra vertex attributes, at locations 4 and 5 in the same vertex array. The vertex shader computes p = p_base + w · Δp and n = n_base + w · Δn in object space, before the model matrix. The normal is normalised again in the fragment shader. The shadow pass's vertex shader applies the same delta, so the shadow changes shape with the sail. The weight goes from the SceneNode to its DrawItem and then to a per-draw uniform. Meshes without a blend shape leave attributes 4 and 5 disabled, so OpenGL supplies (0, 0, 0) and one shader serves every mesh.
 
