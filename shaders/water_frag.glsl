@@ -3,6 +3,9 @@
 in vec3 fragPosition;
 in vec3 fragNormal;
 in float fragHeight;
+in float fragFoam;
+
+uniform bool useFoam;
 
 uniform vec3 cameraPosition;
 uniform bool orthographic;
@@ -178,6 +181,9 @@ void main()
     float specular = D * fresnel * NdotL / max(4.0 * NdotV, 0.1);
 
     vec3 color = mix(body, reflection, fresnel) + lightColor * specular * visibility;
+    // Whitewater is diffuse rather than a sharp mirror reflection. Accumulate its sunlight and
+    // ambient skylight before mixing it with the ordinary water colour (and before fog).
+    vec3 foamLight = skyLight * 0.85 + lightColor * max(dot(geometricN, L), 0.0) * visibility * 0.85;
     // Localised GGX glint and low diffuse scattering make boat shadows legible on the water.
     // The sky reflection is not shadowed by the lamp.
     if (useSpotlight) {
@@ -193,7 +199,21 @@ void main()
             vec3 scatterSpot = vec3(0.025, 0.085, 0.09) * spotNdotL;
             float shadow = spotVisibility(fragPosition, abs(dot(geometricN, SL)));
             color += spotColor * (attenuation * shadow) * (scatterSpot + vec3(specSpot));
+            foamLight += spotColor * (attenuation * shadow) * spotNdotL * 0.85;
         }
+    }
+    if (useFoam && fragFoam > 0.0) {
+        // Reuse the existing tileable water normal map for a fine, irregular coverage mask.
+        // World-space UVs keep the pattern fixed when the camera-following grid snaps.
+        // Two rotated/scrolled scales avoid a repeated checkerboard or uniform white strips.
+        vec2 uv = fragPosition.xz;
+        vec2 drift = windDirection * time * 0.012;
+        float n1 = texture(detailNormalMap, uv * 0.19 + drift).r;
+        float n2 = texture(detailNormalMap, uv.yx * 0.31 - drift * 0.7).g;
+        float breakup = smoothstep(0.34, 0.66, 0.55 * n1 + 0.45 * n2);
+        float foam = fragFoam * breakup;
+        vec3 foamColor = vec3(0.88, 0.94, 0.93) * foamLight;
+        color = mix(color, foamColor, foam);
     }
     if (useFog)
         color = applyFog(color);

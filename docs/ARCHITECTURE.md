@@ -68,6 +68,8 @@ Reproducible screenshots without a window (fixed 1/60 s time step):
 | Shadows (sun/moon) | Orthographic shadow map, PCF, slope-scaled bias, texel snapping, edge fade, debug view | Shadows → … |
 | B1 Bloom | Half-resolution bright-pass extraction, separable Gaussian blur, pre-tone-map HDR composite | Bloom (HDR post-processing) → … |
 | B2 Second shadow-casting light | Lighthouse perspective shadow map (1024²), smooth cone, direct PBR plus water illumination, independently toggleable PCF shadows | Lighthouse spotlight (B2) → … |
+| B3 Minimap | Independent orthographic camera and 256px off-screen render, tonemapped texture, boat-heading marker, capture overlay | Minimap → … |
+| B4 Crest foam (branch implementation) | Analytic Gerstner horizontal Jacobian threshold, existing ripple texture for breakup, ambient/sun/spot foam lighting | Water → Crest foam, Foam compression threshold |
 | HDR + tone mapping | RGBA16F scene target, ACES filmic curve, exposure (prepares bloom) | Sky and light → Exposure |
 | Island + lighthouse | fBm height field with a radial falloff (bays, cliffs, a levelled plateau), normals from central differences; sand/grass/rock maps baked from height and slope; lighthouse hierarchy whose lamp turns, glows at night and is exposed as a `SpotLight` | Island and lighthouse → Island, Lighthouse speed |
 
@@ -969,6 +971,7 @@ flowchart TD
   of the stretching; triplanar mapping would remove it, but needs a terrain shader.
 - The sail's back side gets no direct light (no translucency).
 - Stars are cubemap cells and look slightly square close up.
-- The water does not self-shadow; no foam yet.
+- The water does not self-shadow. B4 adds stylised instantaneous crest foam (no temporal
+  advection/persistence), awaiting full-app visual review before merge.
 - Only tested on Linux (Mesa, AMD 780M) in a Debug build; check a Release build and the other
   teammate's OS early.
