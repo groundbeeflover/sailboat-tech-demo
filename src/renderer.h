@@ -1,5 +1,7 @@
 #pragma once
 #include "bloom.h"
+#include "foam_history.h"
+#include "ssao.h"
 #include "camera.h"
 #include "draw_item.h"
 #include "feature_toggles.h"
@@ -26,6 +28,8 @@ struct FrameContext {
     float time { 0.0f };
     glm::ivec2 framebufferSize { 1 };
     glm::vec3 shadowCenter { 0.0f }; // the shadow map covers an area around this point (the boat)
+    glm::vec3 wideShadowCenter { 0.0f }; // second spatial cascade covers whole course + island
+    float wideShadowExtent { 180.0f };
     SpotLight spot; // second light (e.g. the lighthouse lamp); disabled until the scene provides one
 };
 
@@ -83,14 +87,21 @@ private:
     Shader m_shadowShader;
     Shader m_depthDebugShader;
     Shader m_spotDepthDebugShader;
+    Shader m_ssaoDebugShader;
 
     HdrTarget m_hdr;
     BloomPass m_bloom; // optional half-res HDR highlights, composited before ACES
     Minimap m_minimap; // independent HDR-to-RGBA8 picture-in-picture view
+    FoamHistory m_foamHistory;
+    SsaoPass m_ssao;
     ShadowMap m_shadowMap;
+    ShadowMap m_shadowMapWide; // second (far/wide) sun cascade; allocated only on demand
     ShadowMap m_spotShadowMap; // fixed 1024x1024 depth-only FBO
     glm::mat4 m_lightSpace { 1.0f };
+    glm::mat4 m_lightSpaceWide { 1.0f };
     glm::mat4 m_spotLightSpace { 1.0f };
+    bool m_currentCascades { false };
+    float m_previousFoamTime { -1.0f };
     GLuint m_emptyVao { 0 };
     GLuint m_lineVao { 0 };
     GLuint m_lineVbo { 0 };

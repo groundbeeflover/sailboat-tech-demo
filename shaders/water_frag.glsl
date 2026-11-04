@@ -6,6 +6,10 @@ in float fragHeight;
 in float fragFoam;
 
 uniform bool useFoam;
+uniform bool useFoamHistory;
+uniform sampler2D foamHistoryTexture;
+uniform vec2 foamHistoryCenter;
+uniform float foamHistorySpan;
 
 uniform vec3 cameraPosition;
 uniform bool orthographic;
@@ -28,6 +32,11 @@ uniform float fogDistance;
 
 uniform bool useShadows;
 uniform sampler2DShadow shadowMap;
+uniform sampler2DShadow shadowMapWide;
+uniform mat4 lightSpaceMatrixWide;
+uniform bool useCascades;
+uniform float cascadeSplit;
+uniform float cascadeOverlap;
 uniform mat4 lightSpaceMatrix;
 uniform int pcfRadius;
 uniform float shadowBias;
@@ -103,25 +112,46 @@ vec3 applyFog(vec3 color)
 
 // Fraction of the light that reaches this point: 1 = lit, 0 = in shadow.
 // Same as lightVisibility() in pbr_frag.glsl; see the comments there.
+float shadowSample(sampler2DShadow source, vec3 p, float NdotL)
+{
+    if (p.z <= 0.0 || p.z >= 1.0 || any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0))))
+        return 1.0;
+    float slope = clamp(sqrt(max(1.0 - NdotL * NdotL, 0.0)) / max(NdotL, 0.05), 0.0, 10.0);
+    float bias = shadowBias * (1.0 + slope);
+    vec2 texel = 1.0 / vec2(textureSize(source, 0));
+    float lit = 0.0;
+    for (int x = -pcfRadius; x <= pcfRadius; ++x)
+        for (int y = -pcfRadius; y <= pcfRadius; ++y)
+            lit += texture(source, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
+    float width = float(2 * pcfRadius + 1);
+    return lit / (width * width);
+}
+
+// The near map retains fine boat details; the wide map covers the island and course.
+// A soft transition inside the near-map border prevents a visible cascade seam.
+// Perspective uses a frustum-depth split; top-down orthographic uses spatial coverage.
 float lightVisibility(vec3 worldPosition, float NdotL)
 {
     if (!useShadows)
         return 1.0;
-    vec4 lightSpace = lightSpaceMatrix * vec4(worldPosition, 1.0);
-    vec3 p = lightSpace.xyz / lightSpace.w * 0.5 + 0.5;
-    if (p.z > 1.0)
-        return 1.0;
-    float slope = clamp(sqrt(1.0 - NdotL * NdotL) / max(NdotL, 0.05), 0.0, 10.0);
-    float bias = shadowBias * (1.0 + slope);
-    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
-    float lit = 0.0;
-    for (int x = -pcfRadius; x <= pcfRadius; ++x)
-        for (int y = -pcfRadius; y <= pcfRadius; ++y)
-            lit += texture(shadowMap, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
-    float width = float(2 * pcfRadius + 1);
-    lit /= width * width;
-    vec2 edge = abs(p.xy * 2.0 - 1.0);
-    return mix(lit, 1.0, smoothstep(0.85, 1.0, max(edge.x, edge.y)));
+    vec4 nearClip = lightSpaceMatrix * vec4(worldPosition, 1.0);
+    vec3 nearP = nearClip.xyz / nearClip.w * 0.5 + 0.5;
+    float nearLit = shadowSample(shadowMap, nearP, NdotL);
+    vec2 nearEdge = abs(nearP.xy * 2.0 - 1.0);
+    if (!useCascades)
+        return mix(nearLit, 1.0, smoothstep(0.85, 1.0, max(nearEdge.x, nearEdge.y)));
+    vec4 farClip = lightSpaceMatrixWide * vec4(worldPosition, 1.0);
+    vec3 farP = farClip.xyz / farClip.w * 0.5 + 0.5;
+    float farLit = shadowSample(shadowMapWide, farP, NdotL);
+    vec2 farEdge = abs(farP.xy * 2.0 - 1.0);
+    farLit = mix(farLit, 1.0, smoothstep(0.94, 1.0, max(farEdge.x, farEdge.y)));
+    // Camera-frustum cascades for perspective cameras; the overlap makes the change gradual.
+    // The orthographic map has no meaningful camera-depth split, so it uses world coverage.
+    float transition = orthographic
+        ? smoothstep(0.72, 0.93, max(nearEdge.x, nearEdge.y))
+        : smoothstep(cascadeSplit - cascadeOverlap, cascadeSplit + cascadeOverlap,
+            dot(worldPosition - cameraPosition, viewForward));
+    return mix(nearLit, farLit, transition);
 }
 
 vec3 detailNormal(vec3 N)
@@ -202,7 +232,14 @@ void main()
             foamLight += spotColor * (attenuation * shadow) * spotNdotL * 0.85;
         }
     }
-    if (useFoam && fragFoam > 0.0) {
+    if (useFoam) {
+        float foamSource = fragFoam;
+        if (useFoamHistory) {
+            vec2 historyUV = (fragPosition.xz - foamHistoryCenter) / foamHistorySpan + 0.5;
+            if (all(greaterThanEqual(historyUV, vec2(0.0))) && all(lessThanEqual(historyUV, vec2(1.0))))
+                foamSource = max(foamSource, texture(foamHistoryTexture, historyUV).r);
+        }
+        if (foamSource > 0.0) {
         // Reuse the existing tileable water normal map for a fine, irregular coverage mask.
         // World-space UVs keep the pattern fixed when the camera-following grid snaps.
         // Two rotated/scrolled scales avoid a repeated checkerboard or uniform white strips.
@@ -211,9 +248,10 @@ void main()
         float n1 = texture(detailNormalMap, uv * 0.19 + drift).r;
         float n2 = texture(detailNormalMap, uv.yx * 0.31 - drift * 0.7).g;
         float breakup = smoothstep(0.34, 0.66, 0.55 * n1 + 0.45 * n2);
-        float foam = fragFoam * breakup;
+        float foam = foamSource * breakup;
         vec3 foamColor = vec3(0.88, 0.94, 0.93) * foamLight;
         color = mix(color, foamColor, foam);
+        }
     }
     if (useFog)
         color = applyFog(color);

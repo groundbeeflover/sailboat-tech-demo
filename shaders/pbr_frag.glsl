@@ -23,6 +23,11 @@ uniform float fogDistance;
 
 uniform bool useShadows;
 uniform sampler2DShadow shadowMap;
+uniform sampler2DShadow shadowMapWide;
+uniform mat4 lightSpaceMatrixWide;
+uniform bool useCascades;
+uniform float cascadeSplit;
+uniform float cascadeOverlap;
 uniform mat4 lightSpaceMatrix;
 uniform int pcfRadius;
 uniform float shadowBias;
@@ -46,6 +51,10 @@ uniform float roughnessFactor;
 uniform float metallicFactor;
 uniform vec3 emissive;
 uniform bool doubleSided;
+uniform float transmission; // zero for all materials except thin sailcloth
+uniform bool useSsao;
+uniform sampler2D ssaoTexture;
+uniform vec2 ssaoViewport;
 uniform vec2 uvScale;
 uniform vec2 uvOffset; // e.g. the current frame of a flipbook atlas
 uniform sampler2D albedoMap;
@@ -101,33 +110,46 @@ vec3 viewVector()
 
 // Fraction of the light that reaches this point: 1 = lit, 0 = in shadow.
 // Keep in sync with the copy in water_frag.glsl (GLSL 4.1 has no #include).
+float shadowSample(sampler2DShadow source, vec3 p, float NdotL)
+{
+    if (p.z <= 0.0 || p.z >= 1.0 || any(lessThan(p.xy, vec2(0.0))) || any(greaterThan(p.xy, vec2(1.0))))
+        return 1.0;
+    float slope = clamp(sqrt(max(1.0 - NdotL * NdotL, 0.0)) / max(NdotL, 0.05), 0.0, 10.0);
+    float bias = shadowBias * (1.0 + slope);
+    vec2 texel = 1.0 / vec2(textureSize(source, 0));
+    float lit = 0.0;
+    for (int x = -pcfRadius; x <= pcfRadius; ++x)
+        for (int y = -pcfRadius; y <= pcfRadius; ++y)
+            lit += texture(source, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
+    float width = float(2 * pcfRadius + 1);
+    return lit / (width * width);
+}
+
+// The near map retains fine boat details; the wide map covers the island and course.
+// A soft transition inside the near-map border prevents a visible cascade seam.
+// Perspective uses a frustum-depth split; top-down orthographic uses spatial coverage.
 float lightVisibility(vec3 worldPosition, float NdotL)
 {
     if (!useShadows)
         return 1.0;
-    vec4 lightSpace = lightSpaceMatrix * vec4(worldPosition, 1.0);
-    vec3 p = lightSpace.xyz / lightSpace.w * 0.5 + 0.5; // [-1, 1] -> [0, 1] texture coordinates and depth
-    if (p.z > 1.0)
-        return 1.0; // beyond the far plane of the light box
-
-    // Slope-scaled bias: a surface seen at a grazing angle by the light covers a range of depths
-    // within one shadow-map texel, so it needs a larger offset to avoid shadowing itself (acne).
-    float slope = clamp(sqrt(1.0 - NdotL * NdotL) / max(NdotL, 0.05), 0.0, 10.0); // tan(angle to the light)
-    float bias = shadowBias * (1.0 + slope);
-
-    // Percentage-closer filtering: average depth comparisons over a (2r + 1)^2 texel neighbourhood.
-    // With GL_LINEAR on the depth texture, every lookup is already a bilinear blend of 4 comparisons.
-    vec2 texel = 1.0 / vec2(textureSize(shadowMap, 0));
-    float lit = 0.0;
-    for (int x = -pcfRadius; x <= pcfRadius; ++x)
-        for (int y = -pcfRadius; y <= pcfRadius; ++y)
-            lit += texture(shadowMap, vec3(p.xy + vec2(x, y) * texel, p.z - bias));
-    float width = float(2 * pcfRadius + 1);
-    lit /= width * width;
-
-    // Fade out near the border of the shadow-map area so its square edge never shows.
-    vec2 edge = abs(p.xy * 2.0 - 1.0);
-    return mix(lit, 1.0, smoothstep(0.85, 1.0, max(edge.x, edge.y)));
+    vec4 nearClip = lightSpaceMatrix * vec4(worldPosition, 1.0);
+    vec3 nearP = nearClip.xyz / nearClip.w * 0.5 + 0.5;
+    float nearLit = shadowSample(shadowMap, nearP, NdotL);
+    vec2 nearEdge = abs(nearP.xy * 2.0 - 1.0);
+    if (!useCascades)
+        return mix(nearLit, 1.0, smoothstep(0.85, 1.0, max(nearEdge.x, nearEdge.y)));
+    vec4 farClip = lightSpaceMatrixWide * vec4(worldPosition, 1.0);
+    vec3 farP = farClip.xyz / farClip.w * 0.5 + 0.5;
+    float farLit = shadowSample(shadowMapWide, farP, NdotL);
+    vec2 farEdge = abs(farP.xy * 2.0 - 1.0);
+    farLit = mix(farLit, 1.0, smoothstep(0.94, 1.0, max(farEdge.x, farEdge.y)));
+    // Camera-frustum cascades for perspective cameras; the overlap makes the change gradual.
+    // The orthographic map has no meaningful camera-depth split, so it uses world coverage.
+    float transition = orthographic
+        ? smoothstep(0.72, 0.93, max(nearEdge.x, nearEdge.y))
+        : smoothstep(cascadeSplit - cascadeOverlap, cascadeSplit + cascadeOverlap,
+            dot(worldPosition - cameraPosition, viewForward));
+    return mix(nearLit, farLit, transition);
 }
 
 
@@ -182,6 +204,7 @@ void main()
     if (doubleSided && dot(N, V) < 0.0)
         N = -N; // thin surfaces (sail): light the side we are looking at
     vec3 geometricN = N;
+    float ambientOcclusion = useSsao ? texture(ssaoTexture, gl_FragCoord.xy / ssaoViewport).r : 1.0;
     // Shadow lookup with the geometric normal: the bias must follow the real surface, not the normal map.
     float visibility = lightVisibility(fragPosition, abs(dot(N, normalize(lightDirection))));
 
@@ -223,19 +246,24 @@ void main()
             vec3 prefiltered = textureLod(environmentMap, R, roughness * (environmentMaxLod - 1.0)).rgb;
             vec3 Fa = fresnelSchlick(NdotV, F0);
             vec3 kDa = (1.0 - Fa) * (1.0 - metallic);
-            color += kDa * albedo * irradiance + prefiltered * environmentBRDF(F0, roughness, NdotV);
+            color += (kDa * albedo * irradiance + prefiltered * environmentBRDF(F0, roughness, NdotV)) * ambientOcclusion;
         } else {
-            color += albedo * ambientColor * (1.0 - metallic) + F0 * ambientColor;
+            color += (albedo * ambientColor * (1.0 - metallic) + F0 * ambientColor) * ambientOcclusion;
         }
     } else {
         // Blinn-Phong reference (for side-by-side comparisons), shininess derived from roughness.
         float shininess = 2.0 / max(pow(roughness, 4.0), 1e-4) - 2.0;
         vec3 diffuse = albedo * (1.0 - metallic) * NdotL;
         vec3 specular = mix(vec3(0.04), albedo, metallic) * pow(NdotH, shininess) * (shininess + 8.0) / (8.0 * PI) * NdotL;
-        color = (diffuse + specular) * lightColor * visibility + albedo * ambientColor;
+        color = (diffuse + specular) * lightColor * visibility + albedo * ambientColor * ambientOcclusion;
         if (useEnvironmentMap)
-            color += mix(vec3(0.04), albedo, metallic) * textureLod(environmentMap, R, roughness * (environmentMaxLod - 1.0)).rgb;
+            color += mix(vec3(0.04), albedo, metallic) * textureLod(environmentMap, R, roughness * (environmentMaxLod - 1.0)).rgb * ambientOcclusion;
     }
+
+    // Thin sailcloth transmits diffuse light through its *away-from-camera* side.
+    // Keep this separate from reflection BRDF and direct shadows; no refraction/alpha transparency.
+    if (transmission > 0.0)
+        color += albedo * lightColor * transmission * max(dot(-geometricN, L), 0.0) * visibility;
 
     // Same direct BRDF as the directional sun, but using the lamp's local direction and intensity.
     // Only this direct contribution is shadowed: emission and environment light remain unaffected.
@@ -243,8 +271,12 @@ void main()
         vec3 SL;
         float attenuation = spotAttenuation(spotPosition - fragPosition, SL);
         float spotNdotL = max(dot(N, SL), 0.0);
-        if (attenuation > 0.0 && spotNdotL > 0.0) {
+        if (attenuation > 0.0) {
             vec3 radiance = spotColor * attenuation * spotVisibility(fragPosition, abs(dot(geometricN, SL)));
+            // Backlit sailcloth still transmits when the front-facing BRDF has NdotL = 0.
+            if (transmission > 0.0)
+                color += albedo * radiance * transmission * max(dot(-geometricN, SL), 0.0);
+            if (spotNdotL > 0.0) {
             vec3 SH = normalize(SL + V);
             float spotNdotH = max(dot(N, SH), 0.0);
             float spotVdotH = max(dot(V, SH), 0.0);
@@ -261,6 +293,7 @@ void main()
                 vec3 diffuse = albedo * (1.0 - metallic) * spotNdotL;
                 vec3 specular = F0 * pow(spotNdotH, shininess) * (shininess + 8.0) / (8.0 * PI) * spotNdotL;
                 color += (diffuse + specular) * radiance;
+            }
             }
         }
     }

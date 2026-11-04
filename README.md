@@ -33,6 +33,27 @@ Re-run CMake after updating: B3 adds `src/minimap.cpp` and `shaders/minimap_over
 Scripted screenshots (no window):
 `./build/Master_TechDemo --capture out.png --frames 400 --camera orbit --time 17.6 --set shadows=0`
 
+## Optional Track B effects and stretch techniques (V4 extras)
+
+All five are **disabled by default** so the original V4 appearance and performance remain the
+comparison baseline. Enable each independently from the indicated ImGui panel, or by `--set`:
+
+| Effect | UI section | CLI example |
+|---|---|---|
+| Visible translucent lighthouse beam | Lighthouse spotlight | `--set spotBeam=1 --set spotBeamOpacity=0.8` (night only) |
+| Temporal crest-foam persistence | Water | `--set foam=1 --set temporalFoam=1 --set foamLifetime=2` |
+| Sailcloth backlighting | Shading | `--set sailTranslucency=1 --set sailTransmission=1` |
+| Two directional shadow cascades | Shadows | `--set cascadedShadows=1` |
+| Screen-space ambient occlusion | Ambient occlusion (SSAO stretch) | `--set ssao=1 --set ssaoRadius=1.25 --set ssaoStrength=1` |
+
+For SSAO diagnostics use `--set ssao=1 --set showSsao=1`. The sun shadow-map
+preview shows both cascades when they are enabled. New shaders and source files mean
+**CMake must be reconfigured** before compiling. See
+[Track B implementation notes](docs/TRACK_B_IMPLEMENTATION_NOTES.md#6-v4-track-b-optional-effects-and-stretch-features-b-extras)
+for equations, architecture choices, resource costs, tested cases, limitations and
+reproducible report screenshot pairs. These options still require complete-app visual
+and FPS review on the target PC.
+
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — what is built: feature coverage, UML class diagrams,

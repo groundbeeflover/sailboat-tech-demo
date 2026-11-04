@@ -92,4 +92,18 @@ struct FeatureToggles {
     // B4: foam at horizontally compressed Gerstner crests (Jacobian below threshold).
     bool foam { true };
     float foamThreshold { 0.86f }; // 0.55..0.99; higher = more foam at gentler crests
+
+    // Extra Track B effects: opt in to expensive render passes, keep original look as baseline.
+    bool spotBeam { false }; // inexpensive volumetric-looking translucent cone shells
+    float spotBeamOpacity { 0.7f };
+    bool temporalFoam { false }; // world-space ping-pong history of compressed crests
+    float foamLifetime { 1.7f }; // exponential persistence in seconds
+    bool sailTranslucency { false };
+    float sailTransmission { 0.9f }; // diffuse light coming through thin canvas
+    bool cascadedShadows { false }; // boat detail cascade + wide course/island cascade
+    bool ssao { false }; // screen-space ambient occlusion (opaque objects only)
+    float ssaoRadius { 1.25f };
+    float ssaoStrength { 0.8f };
+    bool showSsao { false }; // visualise the ambient occlusion mask
+
 };

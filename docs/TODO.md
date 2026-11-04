@@ -14,7 +14,7 @@ All 7 minimal requirements are done. Everything below is extras, polish and hand
 | | Track A: world and simulation | Track B: render pipeline |
 |---|---|---|
 | Mindset | New things in the scene, CPU logic, their own meshes/shaders | New passes, post-processing, lighting models |
-| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom (**done**), B2 Spotlight + second shadow map (**done; targeted self-occlusion fix tested**), B3 Minimap (**done, merged into V3**), B4 Crest foam (**implemented in isolated B4 branch; visual review pending**) |
+| Features | A1 Island + lighthouse (**done**), A2 Spray particles, A3 Sail blend shapes, A4 Animated flag texture, A5 Free steering + buoy collision (optional) | B1 Bloom (**done**), B2 Spotlight + second shadow map (**done; targeted self-occlusion fix tested**), B3 Minimap (**done, merged into V3**), B4 Crest foam (**done on V4**) |
 | Owns files | `island.*`, `particles.*`, `flag.*`, `boat.*`, `course.*`, `procedural_*`, `waves.*`, `particle_*.glsl`, `terrain_*.glsl` | `renderer.*`, `bloom.*`, `minimap.*`, `lights.h`, `shadow_map.*`, `framebuffer.*`, `sky.*`, `pbr_*.glsl`, `water_*.glsl`, `post_frag.glsl`, `bloom_*.glsl` |
 | Rough hours | ≈ 12–14 | ≈ 11–13 |
 
@@ -251,6 +251,12 @@ branch-level visual review before merging. See `TRACK_B_IMPLEMENTATION_NOTES.md`
 **Report:** relate it to Tessendorf's "choppy waves" Jacobian criterion; show wave height 1.0 vs 2.0.
 
 ### B-stretch (only if everything above is done)
+
+**V4 optional/stretch update:** the visible B2 beam, world-space ping-pong B4 foam history,
+backlit sailcloth, two directional shadow cascades, and half-resolution SSAO are implemented
+on the B-extras feature branch, pending end-to-end Windows integration/visual and performance
+checks. See [Track B implementation notes](TRACK_B_IMPLEMENTATION_NOTES.md#6-v4-track-b-optional-effects-and-stretch-features-b-extras).
+
 
 - **Sail translucency:** the back side of the sail gets `albedo * lightColor * transmission * max(dot(-N, L), 0)`.
 - **Cascaded shadow maps** for the sun (2 cascades: boat + a wider area for the island).

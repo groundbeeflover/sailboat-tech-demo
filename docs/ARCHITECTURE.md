@@ -975,3 +975,16 @@ flowchart TD
   advection/persistence), awaiting full-app visual review before merge.
 - Only tested on Linux (Mesa, AMD 780M) in a Debug build; check a Release build and the other
   teammate's OS early.
+
+
+---
+
+## V4 Track B optional/stretch extension (unmerged feature branch)
+
+The baseline architecture above documents the initial system. Track B now has an optional
+**B-extras** branch with a visible rotating cone beam, persistent world-space foam history,
+sailcloth diffuse transmission, two directional sun shadow cascades and SSAO. The extra
+passes are independently switchable and default to off. See
+`TRACK_B_IMPLEMENTATION_NOTES.md` §6 for the exact render ordering, equations, framebuffer
+formats, camera-dependent cascade logic, cross-track edit and verified/pending tests.
+This addendum does **not** imply that the teammate has merged or visually validated these changes.

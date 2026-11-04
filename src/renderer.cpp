@@ -20,9 +20,15 @@ constexpr GLint NormalUnit = 1;
 constexpr GLint RoughnessUnit = 2;
 constexpr GLint EnvironmentUnit = 3;
 constexpr GLint ShadowUnit = 4; // only ever used by sampler2DShadow (mixing sampler types on one unit is an error)
+constexpr GLint WideShadowUnit = 6;
+constexpr GLint SsaoUnit = 7;
+constexpr GLint FoamHistoryUnit = 8;
 constexpr GLint SpotShadowUnit = 5; // second independent sampler2DShadow
 constexpr int SpotShadowResolution = 1024;
 constexpr float SpotNearPlane = 0.5f;
+constexpr float SunCascadeSplit = 55.0f; // world metres along the perspective camera's forward vector
+constexpr float SunCascadeOverlap = 12.0f;
+constexpr float SunCascadeFar = 370.0f; // sufficient for the buoy course, shoreline and lighthouse
 
 Shader buildShader(const char* vertexFile, const char* fragmentFile)
 {
@@ -44,6 +50,7 @@ Renderer::Renderer()
     , m_shadowShader(buildShader("shadow_vert.glsl", "shadow_frag.glsl")) // the starter code's depth-only shaders
     , m_depthDebugShader(buildShader("fullscreen_vert.glsl", "depth_debug_frag.glsl"))
     , m_spotDepthDebugShader(buildShader("fullscreen_vert.glsl", "spot_depth_debug_frag.glsl"))
+    , m_ssaoDebugShader(buildShader("fullscreen_vert.glsl", "ssao_debug_frag.glsl"))
 {
     m_shadowMap.resize(2048);
     m_spotShadowMap.resize(SpotShadowResolution);
@@ -72,11 +79,25 @@ Renderer::~Renderer()
 
 void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water& water, const Waves& waves, const Sky& sky, const FeatureToggles& toggles)
 {
+    m_currentCascades = toggles.shadows && toggles.cascadedShadows;
     if (toggles.shadows)
         drawShadowMap(frame, lists.opaque, toggles);
     // Independent second depth pass, only at night while the island's lamp is enabled.
     if (toggles.spotlight && frame.spot.enabled && toggles.spotShadows)
         drawSpotShadowMap(frame, lists.opaque);
+
+    if (toggles.foam && toggles.temporalFoam) {
+        const float dt = m_previousFoamTime < 0.0f ? 0.0f : std::max(frame.time - m_previousFoamTime, 0.0f);
+        m_foamHistory.update(waves, frame.time, dt, glm::vec2(frame.shadowCenter.x, frame.shadowCenter.z),
+            toggles.foamThreshold, toggles.foamLifetime, m_emptyVao);
+    } else {
+        m_foamHistory.reset();
+    }
+    m_previousFoamTime = frame.time;
+
+    if (toggles.ssao)
+        m_ssao.render(frame.camera, frame.framebufferSize, lists.opaque,
+            toggles.ssaoRadius, toggles.ssaoStrength, m_emptyVao);
 
     m_hdr.resize(frame.framebufferSize);
     m_hdr.bind();
@@ -91,16 +112,29 @@ void Renderer::render(const FrameContext& frame, const RenderLists& lists, Water
     drawOpaque(frame, lists.opaque, sky, toggles);
     drawWater(frame, water, waves, sky, toggles);
     drawLines(frame, lists.lines);
-    drawTransparent(frame, lists.transparent);
-    // Drawn last so it only covers pixels nothing else wrote; it makes no sense from straight above.
+    // The sky must be behind transparent particles / the lighthouse beam. Since blended passes
+    // do not write depth, drawing the sky afterwards would erase their pixels over the horizon.
     if (toggles.skybox && !frame.camera.orthographic)
         drawSkybox(frame, sky);
+    drawTransparent(frame, lists.transparent);
 
     if (toggles.bloom)
         m_bloom.render(m_hdr.colorTexture(), frame.framebufferSize, toggles.bloomThreshold, toggles.bloomIterations, m_emptyVao);
 
     tonemap(m_hdr.colorTexture(), toggles.bloom ? m_bloom.texture() : m_hdr.colorTexture(),
         0, frame.framebufferSize, toggles.bloom, toggles.showBloomBuffer, toggles.bloomIntensity, toggles.exposure);
+    if (toggles.ssao && toggles.showSsao) {
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, frame.framebufferSize.x, frame.framebufferSize.y);
+        glDisable(GL_DEPTH_TEST);
+        m_ssaoDebugShader.bind();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_ssao.texture());
+        uniform::set("aoTexture", 0);
+        glBindVertexArray(m_emptyVao);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glEnable(GL_DEPTH_TEST);
+    }
     if (toggles.shadows && toggles.showShadowMap)
         drawShadowMapDebugView(frame);
     if (toggles.spotlight && frame.spot.enabled && toggles.spotShadows && toggles.showSpotShadowMap)
@@ -125,6 +159,7 @@ void Renderer::renderMinimap(const FrameContext& frame, const RenderLists& lists
     mapToggles.spotShadows = false;
     mapToggles.fog = false;
     mapToggles.waterWireframe = false;
+    mapToggles.ssao = false; // AO texture belongs to the main camera, not the minimap camera.
 
     m_minimap.bindHdr();
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -200,7 +235,12 @@ void Renderer::drawMinimapCaptureOverlay(glm::ivec2 framebufferSize)
 void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawItem>& items, const FeatureToggles& toggles)
 {
     m_shadowMap.resize(toggles.shadowResolution);
-    m_lightSpace = directionalLightMatrix(frame.lighting.lightDirection, frame.shadowCenter, toggles.shadowExtent, ShadowDepthRange, m_shadowMap.resolution());
+    const bool perspectiveCascades = toggles.cascadedShadows && !frame.camera.orthographic;
+    m_lightSpace = perspectiveCascades
+        ? directionalCascadeMatrix(frame.camera, frame.lighting.lightDirection,
+            Cameras::NearPlane, SunCascadeSplit + SunCascadeOverlap, m_shadowMap.resolution())
+        : directionalLightMatrix(frame.lighting.lightDirection, frame.shadowCenter,
+            toggles.shadowExtent, ShadowDepthRange, m_shadowMap.resolution());
 
     m_shadowMap.bind();
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -214,6 +254,21 @@ void Renderer::drawShadowMap(const FrameContext& frame, const std::vector<DrawIt
 
     // The water receives but does not cast shadows; blend-shaped sails cast correctly.
     renderDepthItems(m_lightSpace, items);
+    if (toggles.cascadedShadows) {
+        // Perspective views: true camera-depth frustum slices, 55m split and 12m overlap.
+        // Orthographic top view: depth slices are meaningless (camera is 500m overhead),
+        // so fall back to two anchored spatial levels around the boat and whole course.
+        m_shadowMapWide.resize(toggles.shadowResolution);
+        m_lightSpaceWide = perspectiveCascades
+            ? directionalCascadeMatrix(frame.camera, frame.lighting.lightDirection,
+                SunCascadeSplit - SunCascadeOverlap, SunCascadeFar, m_shadowMapWide.resolution())
+            : directionalLightMatrix(frame.lighting.lightDirection,
+                frame.wideShadowCenter, frame.wideShadowExtent,
+                ShadowDepthRange * 4.0f, m_shadowMapWide.resolution());
+        m_shadowMapWide.bind();
+        glClear(GL_DEPTH_BUFFER_BIT);
+        renderDepthItems(m_lightSpaceWide, items);
+    }
     glDisable(GL_POLYGON_OFFSET_FILL);
 }
 
@@ -249,7 +304,8 @@ void Renderer::drawSpotShadowMap(const FrameContext& frame, const std::vector<Dr
 void Renderer::drawSpotShadowMapDebugView(const FrameContext& frame)
 {
     const GLsizei size = frame.framebufferSize.y / 4;
-    glViewport(12 + size + 12, 12, size, size);
+    // Leave room for both sun cascades when the two-map debug view is enabled.
+    glViewport(12 + (m_currentCascades ? 2 : 1) * (size + 12), 12, size, size);
     glDisable(GL_DEPTH_TEST);
     m_spotDepthDebugShader.bind();
     glActiveTexture(GL_TEXTURE0);
@@ -281,6 +337,14 @@ void Renderer::drawShadowMapDebugView(const FrameContext& frame)
     glBindVertexArray(m_emptyVao);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    if (m_shadowMapWide.resolution() && m_shadowMapWide.depthTexture() && m_currentCascades) {
+        glViewport(24 + size, 12, size, size);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_shadowMapWide.depthTexture());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    }
     glViewport(0, 0, frame.framebufferSize.x, frame.framebufferSize.y);
     glEnable(GL_DEPTH_TEST);
 }
@@ -311,6 +375,20 @@ void Renderer::setFrameUniforms(const FrameContext& frame, const Sky& sky, const
     glActiveTexture(GL_TEXTURE0 + ShadowUnit);
     glBindTexture(GL_TEXTURE_2D, m_shadowMap.depthTexture());
     uniform::set("shadowMap", ShadowUnit);
+    uniform::set("useCascades", toggles.shadows && toggles.cascadedShadows);
+    uniform::set("lightSpaceMatrixWide", m_lightSpaceWide);
+    uniform::set("cascadeSplit", SunCascadeSplit);
+    uniform::set("cascadeOverlap", SunCascadeOverlap);
+    glActiveTexture(GL_TEXTURE0 + WideShadowUnit);
+    glBindTexture(GL_TEXTURE_2D, toggles.shadows && toggles.cascadedShadows
+        ? m_shadowMapWide.depthTexture() : m_shadowMap.depthTexture());
+    uniform::set("shadowMapWide", WideShadowUnit);
+
+    uniform::set("useSsao", toggles.ssao);
+    uniform::set("ssaoViewport", glm::vec2(frame.framebufferSize));
+    glActiveTexture(GL_TEXTURE0 + SsaoUnit);
+    glBindTexture(GL_TEXTURE_2D, toggles.ssao ? m_ssao.texture() : 0);
+    uniform::set("ssaoTexture", SsaoUnit);
 
     const bool activeSpot = toggles.spotlight && frame.spot.enabled;
     uniform::set("useSpotlight", activeSpot);
@@ -347,6 +425,7 @@ void Renderer::drawOpaque(const FrameContext& frame, const std::vector<DrawItem>
         uniform::set("roughnessFactor", m.roughness);
         uniform::set("metallicFactor", m.metallic);
         uniform::set("emissive", m.emissive);
+        uniform::set("transmission", toggles.sailTranslucency ? m.transmission * toggles.sailTransmission : 0.0f);
         uniform::set("doubleSided", m.doubleSided);
         uniform::set("uvScale", m.uvScale);
         uniform::set("uvOffset", m.uvOffset);
@@ -390,6 +469,13 @@ void Renderer::drawWater(const FrameContext& frame, Water& water, const Waves& w
     uniform::set("windDirection", waves.mainDirection());
     uniform::set("useFoam", toggles.foam);
     uniform::set("foamThreshold", std::clamp(toggles.foamThreshold, 0.55f, 0.99f));
+    const bool history = toggles.foam && toggles.temporalFoam && m_foamHistory.valid();
+    uniform::set("useFoamHistory", history);
+    uniform::set("foamHistoryCenter", m_foamHistory.center());
+    uniform::set("foamHistorySpan", m_foamHistory.span());
+    glActiveTexture(GL_TEXTURE0 + FoamHistoryUnit);
+    glBindTexture(GL_TEXTURE_2D, history ? m_foamHistory.texture() : 0);
+    uniform::set("foamHistoryTexture", FoamHistoryUnit);
 
     uniform::set("useDetailNormals", toggles.waterDetailNormals);
     water.detailNormals().bind(GL_TEXTURE0);

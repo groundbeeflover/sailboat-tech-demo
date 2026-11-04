@@ -40,3 +40,9 @@ glm::mat4 directionalLightMatrix(const glm::vec3& lightDirection, const glm::vec
 struct SpotLight;
 // Unlike a directional light, a local cone uses a perspective view/projection.
 glm::mat4 spotLightMatrix(const SpotLight& spot, float nearPlane = 0.5f);
+
+// Fit a directional orthographic shadow map to a slice of a perspective camera frustum.
+// Depths are eye-space metres; small overlapping slices suppress transitions between cascades.
+struct CameraView;
+glm::mat4 directionalCascadeMatrix(const CameraView& camera, const glm::vec3& lightDirection,
+    float nearDepth, float farDepth, int resolution);

@@ -9,6 +9,7 @@
 #include "waves.h"
 #include "particles.h"
 #include "flag.h"
+#include "spot_beam.h"
 // Always include window first (because it includes glfw, which includes GL which needs to be included AFTER glew).
 // Can't wait for modules to fix this stuff...
 #include <framework/disable_all_warnings.h>
@@ -73,6 +74,9 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "spotlight", &t.spotlight }, { "spotShadows", &t.spotShadows }, { "showSpotShadowMap", &t.showSpotShadowMap },
         { "minimap", &t.minimap }, { "minimapFollowsHeading", &t.minimapFollowsHeading },
         { "foam", &t.foam },
+        { "spotBeam", &t.spotBeam }, { "temporalFoam", &t.temporalFoam },
+        { "sailTranslucency", &t.sailTranslucency }, { "cascadedShadows", &t.cascadedShadows },
+        { "ssao", &t.ssao }, { "showSsao", &t.showSsao },
 
     };
     const std::pair<const char*, float*> floats[] = {
@@ -88,6 +92,9 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         // Track B parameters:
         { "bloomThreshold", &t.bloomThreshold }, { "bloomIntensity", &t.bloomIntensity },
         { "spotBias", &t.spotBias }, { "foamThreshold", &t.foamThreshold },
+        { "spotBeamOpacity", &t.spotBeamOpacity }, { "foamLifetime", &t.foamLifetime },
+        { "sailTransmission", &t.sailTransmission }, { "ssaoRadius", &t.ssaoRadius },
+        { "ssaoStrength", &t.ssaoStrength },
 
     };
     const std::pair<const char*, int*> ints[] = {
@@ -192,6 +199,9 @@ public:
                 .framebufferSize = framebufferSize,
                 // Halfway up the mast, so the light box holds the whole rig.
                 .shadowCenter = m_boat.coursePosition() + glm::vec3(0.0f, 4.0f, 0.0f),
+                .wideShadowCenter = m_course.center() + glm::vec3(0.0f, 8.0f, 0.0f),
+                .wideShadowExtent = m_course.radius() * 1.4f,
+                .spot = {},
             };
             // ---- Track A: provide the spotlight here
             frame.spot = m_island.lampLight();
@@ -208,6 +218,9 @@ public:
             m_flag.root().collect(lists.opaque);
             if (m_toggles.particles)
                 lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
+            // ---- Track B: translucent lighthouse beam in the existing transparent-pass hook.
+            if (m_toggles.spotlight && m_toggles.spotBeam && frame.spot.enabled)
+                lists.transparent.push_back([this](const FrameContext& f) { m_spotBeam.draw(f, m_toggles.spotBeamOpacity); });
 
 
             m_renderer.render(frame, lists, m_water, m_waves, m_sky, m_toggles);
@@ -308,6 +321,7 @@ private:
         bloomUi();
         spotlightUi();
         minimapUi();
+        extraRenderingUi();
 
         if (ImGui::Button("Save screenshot (P)"))
             m_screenshotRequested = true;
@@ -367,6 +381,9 @@ private:
                 ImGui::SliderFloat("Foam compression threshold", &t.foamThreshold, 0.55f, 0.99f, "%.2f");
                 ImGui::TextDisabled("Higher threshold = foam on gentler wave crests");
             }
+            ImGui::Checkbox("Temporal foam persistence (optional)", &t.temporalFoam);
+            if (t.temporalFoam)
+                ImGui::SliderFloat("Foam lifetime (s)", &t.foamLifetime, 0.3f, 5.0f);
             ImGui::Checkbox("Wireframe", &t.waterWireframe);
         }
     }
@@ -381,6 +398,9 @@ private:
             ImGui::Checkbox("Environment map", &t.environmentMap);
             ImGui::Checkbox("Skybox", &t.skybox);
             ImGui::Checkbox("Fog", &t.fog);
+            ImGui::Checkbox("Sailcloth translucency (stretch)", &t.sailTranslucency);
+            if (t.sailTranslucency)
+                ImGui::SliderFloat("Canvas transmission", &t.sailTransmission, 0.0f, 2.0f);
         }
     }
 
@@ -397,6 +417,9 @@ private:
             ImGui::SliderFloat("Depth bias", &t.shadowBias, 0.0f, 0.003f, "%.5f");
             ImGui::SliderFloat("Area half-size (m)", &t.shadowExtent, 6.0f, 40.0f, "%.0f");
             ImGui::Checkbox("Show shadow map", &t.showShadowMap);
+            ImGui::Checkbox("Two sun shadow cascades (stretch)", &t.cascadedShadows);
+            if (t.cascadedShadows)
+                ImGui::TextDisabled("Near: boat detail; far: course and island.");
         }
     }
 
@@ -490,6 +513,9 @@ private:
             ImGui::Checkbox("Spotlight shadows", &t.spotShadows);
             ImGui::SliderFloat("Spot depth bias", &t.spotBias, 0.0f, 0.0005f, "%.6f");
             ImGui::Checkbox("Show spot shadow map", &t.showSpotShadowMap);
+            ImGui::Checkbox("Visible light beam (optional)", &t.spotBeam);
+            if (t.spotBeam)
+                ImGui::SliderFloat("Beam opacity", &t.spotBeamOpacity, 0.0f, 1.0f);
             ImGui::TextDisabled("Night: time 0-5 or 20-24. Compare light/shadows on and off.");
         }
     }
@@ -502,6 +528,20 @@ private:
             ImGui::SliderInt("Map resolution (px)", &t.minimapSize, 128, 512);
             ImGui::Checkbox("Heading up", &t.minimapFollowsHeading);
             ImGui::TextDisabled("Top-down course view; orange arrow = boat heading.");
+        }
+    }
+
+    void extraRenderingUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Ambient occlusion (SSAO stretch)")) {
+            ImGui::Checkbox("Screen-space ambient occlusion", &t.ssao);
+            if (t.ssao) {
+                ImGui::SliderFloat("AO sample radius (m)", &t.ssaoRadius, 0.3f, 4.0f);
+                ImGui::SliderFloat("AO strength", &t.ssaoStrength, 0.0f, 2.0f);
+                ImGui::Checkbox("Show AO buffer", &t.showSsao);
+            }
+            ImGui::TextDisabled("Most visible where deck, mast, and cabin meet.");
         }
     }
 
@@ -600,7 +640,8 @@ private:
     Flag m_flag;
 
 
-    // ---- Track B members (if any) ----
+    // ---- Track B members ----
+    SpotBeam m_spotBeam;
 
     float m_time { 0.0f };
     float m_frameTime { 1.0f / 60.0f };

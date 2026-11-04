@@ -94,7 +94,7 @@ Boat::Boat()
     m_cabinMaterial = { .albedo = glm::vec3(0.86f, 0.86f, 0.83f), .roughness = 0.3f };
     m_aluminiumMaterial = { .albedo = glm::vec3(0.91f, 0.92f, 0.93f), .roughness = 0.3f, .metallic = 1.0f };
     m_steelMaterial = { .albedo = glm::vec3(0.75f, 0.75f, 0.77f), .roughness = 0.2f, .metallic = 1.0f };
-    m_sailMaterial = { .albedo = glm::vec3(0.93f, 0.91f, 0.86f), .roughness = 0.75f, .doubleSided = true };
+    m_sailMaterial = { .albedo = glm::vec3(0.93f, 0.91f, 0.86f), .roughness = 0.75f, .doubleSided = true, .transmission = 1.0f };
     m_varnishMaterial = { .albedo = glm::vec3(0.45f, 0.2f, 0.09f), .roughness = 0.25f };
     m_vaneMaterial = { .albedo = glm::vec3(0.85f, 0.08f, 0.04f), .roughness = 0.4f };
 

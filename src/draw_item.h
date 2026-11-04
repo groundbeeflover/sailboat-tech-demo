@@ -28,6 +28,7 @@ struct PBRMaterial {
     glm::vec2 uvOffset { 0.0f };
 
     bool doubleSided { false }; // thin surfaces such as the sail
+    float transmission { 0.0f }; // thin-surface backlighting, nonzero for sailcloth only
 };
 
 // One mesh to draw with the PBR shader: produced by SceneNode::collect, consumed by the Renderer.

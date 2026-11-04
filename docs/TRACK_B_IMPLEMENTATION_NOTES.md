@@ -715,3 +715,119 @@ course-provided `final_project.html` (additional graphical technique, togglable 
 *Simulating Ocean Water* (2001), and Mark Finch, *Effective Water Simulation from Physical
 Models* (GPU Gems chapter 1, 2004). We implemented the per-vertex Gerstner Jacobian
 approach above; we did **not** implement Tessendorf's FFT ocean or foam advection.
+
+---
+
+## 6. V4 Track B optional effects and stretch features (B-Extras)
+
+**Baseline:** the user-supplied V4 (A4 + B4) zip. A1–A4, B1–B4 and the B2 lamp self-shadow correction were retained. This addendum supersedes the earlier B4 note that temporal persistence was only future work. **Status: implemented, C++ and isolated GPU tests passed; complete-app visual/performance review on Windows remains pending.** No owner percentages are invented; these new rendering features are assigned to Track B for the final contribution table.
+
+### 6.1 B2 optional — visible lighthouse beam
+
+**Source:** `src/spot_beam.h/.cpp`, `shaders/beam_vert.glsl`, `shaders/beam_frag.glsl`, `src/application.cpp`, `src/feature_toggles.h` and `CMakeLists.txt`.
+
+The real B2 spotlight already illuminates surfaces but ordinary direct lighting does not show the volume through empty air. We draw *three concentric thin cone shells* around the same `FrameContext::spot.position` and `direction`. The static mesh has 32 radial sectors, 18 longitudinal rings and three nested shells: `3 × 32 × 18 × 6 = 10,368` triangle vertices, generated once at application startup. The axes are formed from the spotlight direction plus a safe alternative up vector for vertical aim; no Track A animation code is changed. The cone radius grows as `r(t) = tan(outerAngle) × reach × t`, with reach capped at 145 m to avoid overwhelming the horizon. The fragment shader fades brightness with `pow(1-t,1.7)`, softens the source and cone tip, and gives the shells different faint weights.
+
+The beam enters the **existing B0 `RenderLists::transparent` hook**. It uses depth test, disables depth writes via the renderer's existing transparent-pass contract, and changes blending to **`SRC_ALPHA, ONE`** so overlapping shells contribute light additively in the HDR target before Bloom. The renderer now draws the skybox *before* transparent passes; otherwise the fullscreen skybox would overwrite beam or spray pixels in sky areas where those passes do not write depth. A separate `spotBeam` toggle and `spotBeamOpacity` slider/CLI option allow a clear comparison. The beam only draws when the real lighthouse light is enabled (normally nighttime).
+
+**Why this method:** a 3D volumetric ray-marching/froxel solution would require density integration, depth reconstruction, noise and additional scattering/shadow work. The cone is cheap, appropriate for an optional demonstrator, and blooms naturally. **Limitations:** this is an artistic translucent surface approximation, *not physically volumetric scattering*, and the air itself is not spotlight-shadowed. Test from a low chase/orbit camera at night to see the cone; adjust opacity to avoid an overexposed solid wedge.
+
+### 6.2 B4 optional — temporally persistent crest foam
+
+**Source:** `src/foam_history.h/.cpp`, `shaders/foam_history_frag.glsl`, `shaders/water_frag.glsl`, `src/renderer.*`, and the Water UI/toggles.
+
+The original B4 Jacobian detects breaking crests **only instantaneously**. For lingering whitecaps we introduced two **512×512 R16F** foam-history textures and colour-only FBOs. This is a **world-space** ping-pong simulation covering a 230×230 m square centred on the boat. Every main frame, an offscreen fullscreen shader calculates the *same horizontal Gerstner Jacobian* as `water_vert.glsl` at each texel's world-space rest position. It then reprojects the current world texel into the *previous frame's world-square position* and evaluates
+
+`F_new(x,z) = max(F_instant(x,z), F_previous(x,z) × exp(-dt / lifetime))`.
+
+The `max` operation lets fresh compression create foam immediately while older foam exponentially fades (default lifetime **1.7 s**). When water renders, its current interpolated mask is combined with the world-space history at the fragment's x/z position, then the original tileable breakup texture and ambient/sun/spot illumination are applied. The simulation does not need motion vectors, avoids screen-space ghosting as the camera moves, and uses **two ~0.5 MB half-float textures** rather than a full-resolution G-buffer. A jump beyond 40% of the history span invalidates old samples; turning waves off invalidates history. Beyond the stored square, water uses normal instantaneous B4 foam. `temporalFoam=0/1` and `foamLifetime` are independent of `foam` and `foamThreshold`.
+
+**Why this method:** screen-space history would smear foam when moving the camera and would need motion/depth reprojection. A world-space domain is stable and easy to explain, but its fixed resolution limits the amount of very fine foam. **Limitations:** this only persists and decays foam; it does **not** simulate physical foam advection, age-dependent diffusion, or exact Lagrangian tracking of individual Gerstner wave particles. `water_frag.glsl` samples history at displaced fragment x/z rather than inverting Gerstner displacement, so highly steep waves can offset coverage slightly. Do not call it a full water fluid solver.
+
+### 6.3 B-stretch — sailcloth transmission
+
+**Source:** `src/draw_item.h`, one **additive material setting** on the Track A-owned sail in `src/boat.cpp`, `shaders/pbr_frag.glsl`, `src/renderer.cpp`, and the Shading UI/toggles.
+
+`PBRMaterial` gains `transmission` (default zero); **only the sail material** sets it to `1.0`. The old double-sided normal flipping is retained: after orienting `N` toward the camera, light arriving from behind the viewer-facing side adds a diffuse transmission term:
+
+`L_trans = albedo × incoming_light_radiance × transmission × max(0, dot(-N, L)) × visibility`.
+
+We evaluate it for the directional sun/moon and separately for the existing B2 spotlight (including its *own* shadow visibility and distance attenuation). The spotlight transmission check is **outside** the usual `NdotL > 0` direct-reflection branch; otherwise the very case transmission should show—illumination from the back—would be skipped. Set global `sailTranslucency=1` and adjust `sailTransmission` in the UI to compare on/off. Existing hull, flag, and lighthouse PBR materials remain opaque and unaffected.
+
+**Why this method:** a thin sheet needs a backlighting response; ordinary double-sided Cook–Torrance only lights the camera-facing side and can leave cloth dark even with sunlight directly behind. This is a cheap **thin-surface diffuse transmission approximation**, not refraction, alpha blending, or subsurface scattering. It preserves the sail's mesh, animated blend shape, shadow casting, depth testing and draw order. Strong values are deliberately user-adjustable for demonstration; default intensity of 0.9 is not a measured physical coefficient. The one-line `boat.cpp` material edit should be mentioned to the Track A owner before merging.
+
+### 6.4 B-stretch — two cascades for directional shadows
+
+**Source:** `src/shadow_map.h/.cpp`, `src/renderer.h/.cpp`, both PBR and water fragment shaders, `src/application.cpp` (world coverage inputs), and Shadows UI/toggles.
+
+With `cascadedShadows=1`, the directional shadow system draws **two independent depth maps** at the currently chosen sun-shadow resolution. For perspective chase/deck/orbit cameras, we genuinely **split the view frustum in camera space**: near depth **0.2–67 m** and far depth **43–370 m**; the 55 m nominal split has a **12 m overlap on either side**. We unproject the frustum's eight corners, fit an orthographic light projection to each slice, add 55 m of light-depth padding for nearby shadow casters, enforce square texels and snap the light-space centre to whole texels to reduce shimmer. The new `ShadowMap m_shadowMapWide` is a second depth-only FBO; the original boat map remains the first. Shader samplers use units **4** (near) and **6** (far), independent of spotlight shadows on unit **5**.
+
+PBR and water shaders use camera-view depth `dot(worldPosition - cameraPosition, viewForward)` to choose the cascade, blending the shadow visibility between depths 43–67 m to hide a sharp boundary. The main top-down camera is orthographic and 500 m above the water; splitting at 55 m is meaningless there, so **only in orthographic mode** we use two *spatial* levels: the original close boat box and a larger course-centred box (1.4 × course radius) to include the island. Its near-box border blends into the wide map. The two depth maps are visible side by side in the debug view when cascades are on. The spotlight projection, the B2 emitting-lamp exclusion and both B2 PCF paths remain unchanged.
+
+**Why:** a single tight directional shadow map draws crisp shadows around the boat but cannot cover the remote island; simply expanding its bounds reduces texels per metre everywhere. Two cascades assign detail to near surfaces and broad coverage to the course/island. **Trade-offs:** an additional full depth pass, another 2048² depth texture (~12 MiB for 24-bit values, driver-dependent storage), possible transition differences due to density/resolution, and no shadows past the 370 m far limit. This is a basic 2-cascade frustum scheme, **not** a full 3–4-cascade engine implementation with screen-space derivative filtering or a texel-stable moving-sphere fit. Top-down uses the documented spatial fallback. The `shadowExtent` slider still controls the single-map mode and top-down fallback, not the frustum-fitted near map in perspective cascaded mode.
+
+### 6.5 B-stretch — SSAO
+
+**Source:** `src/ssao.h/.cpp`, `shaders/ssao_geometry_{vert,frag}.glsl`, `shaders/ssao_frag.glsl`, `shaders/ssao_blur_frag.glsl`, `shaders/ssao_debug_frag.glsl`, `shaders/pbr_frag.glsl`, `src/renderer.*`, UI/toggles and `CMakeLists.txt`.
+
+This expensive technique is **off by default**. When enabled, before shading the main scene we render **opaque geometry only** into a full-resolution normal + depth target (`RGB16F` view-space normals and `DEPTH_COMPONENT24` texture). The prepass shares the existing blend-shape attributes, so A3's moving sail is represented accurately. A half-resolution fullscreen shader reconstructs each pixel's view-space position via `inverseProjection` and depth, forms a tangent basis around its interpolated view normal, and checks **16 hemisphere samples**, rotated by a per-pixel hash, against the depth buffer. Each sample uses a controllable world-space radius and a depth-range falloff. The resulting `R8` occlusion factor is smoothed with a depth-aware 5×5 weighted blur into a second `R8` target. The PBR shader samples this final texture by `gl_FragCoord / viewport` and applies the result **only to indirect/ambient terms** (diffuse irradiance and image-based specular, or fallback ambient). Sun, lighthouse, emissive materials and thin-sail transmission stay direct and unmodified. Water and transparent particles are **not** ambient-occluded. The minimap deliberately disables SSAO because its different camera would invalidate the screen-space mask.
+
+`ssao=0/1`, `ssaoRadius`, `ssaoStrength`, and `showSsao` are exposed in the Shading/SSAO controls and CLI. The debug mode displays the grayscale AO mask instead of the tonemapped scene. For a course report, compare the deck/cabin/mast junctions and the boat on an orbit camera. The flat open water itself offers almost no SSAO benefit, which is why the original TODO called this low priority.
+
+**Why:** SSAO adds convincing small-scale contact shading without storing an additional shadow map for every ambient direction. **Limitations:** it is inherently view dependent and cannot see hidden geometry behind the closest surface; halos, noise, and disappearing occlusion at screen boundaries are possible. It is not physically correct global illumination. A geometry prepass and 16+25 half-res lookups per pixel cost substantially more than the other optional effects; verify FPS on the target PC before leaving it on by default.
+
+### 6.6 Render order, compatibility and file ownership
+
+Main rendering with all extras enabled:
+
+1. Sun/moon shadow-map pass #1 (near); optional cascade #2 (far); independent B2 spotlight shadow map (lamp still excluded only from *its own* map).
+2. World-space temporal foam history update (two ping-pong R16F textures); full-res SSAO depth+normal prepass → half-res SSAO → edge-aware blur.
+3. Original full-res HDR scene: opaque PBR (sun/cascades, spotlight, ambient SSAO, sail transmission); water (original B4 instantaneous foam plus optional history); lines; skybox; additive lighthouse beam and the existing blended A2 particles (both depth-tested, no depth writes).
+4. B1 bright pass/blur/composite before tone mapping; optional B2/B-stretch/SSAO debug views.
+5. B3 minimap camera pass remains separate. It can reuse temporal foam, but does not rebuild the AO, shadow maps, temporal history or beam.
+
+No source files from Track A's spray, flag, island or physics systems were modified; **only the sail's `PBRMaterial` initializer in `src/boat.cpp`** changed to opt into transmission, and the shared application and toggles received small additive UI/frame hooks. Preserve the B2 `castsSpotShadow` guard and the B3 capture overlay when merging.
+
+**Texture unit allocation:** albedo 0, normal 1, roughness 2, environment cubemap 3, sun-shadow near 4, spotlight shadow 5, sun-shadow far 6, SSAO 7 and foam history 8. Use different texture units for samplers with differing types to avoid OpenGL sampler-validation errors.
+
+### 6.7 Validation performed on supplied V4 source
+
+- **C++ syntax:** affected `src/application.cpp`, `src/renderer.cpp`, `src/boat.cpp`, `src/shadow_map.cpp`, `src/spot_beam.cpp`, `src/foam_history.cpp`, `src/ssao.cpp` passed `g++ -std=c++20 -fsyntax-only` using the project's vendored includes; a **test-only** empty `GL/glu.h` shim replaces an unavailable system header. No shim is shipped in the source ZIP.
+- **Shader compilation and program linking:** all newly introduced shader pairs plus the modified PBR, water and shadow pairs compiled and linked in a real **Mesa 25.0.7 OpenGL 4.5 Core** context via surfaceless EGL. Source shaders declare `#version 410`. This is not a test on the target Windows driver.
+- **Actual GPU temporal history:** with a synthetic compressed crest the R16F target produced **1.000**; with no further compression and a decay factor 0.5, the reprojected history produced **0.500**; after invalidating previous history it produced **0.000**.
+- **Actual GPU SSAO:** a flat synthetic depth plane produced AO visibility **1.000**; introducing a closer screen-space wall reduced it to **0.733** at the measured pixel. All test normal/depth/AO FBOs reported `GL_FRAMEBUFFER_COMPLETE`.
+- **Actual GPU sail transmission:** a synthetic sail facing the camera but illuminated from behind had linear HDR red **0.0208** with transmission off and **0.9204** with sun transmission enabled. With the sun disabled and the spotlight behind the sail, output changed from **0.0208** to **7.2109**. This specifically exercises the separate back-facing spotlight contribution. No OpenGL errors occurred in these GPU tests.
+- **Cascade frustum maths:** a compiled C++ test built the near/far light matrices for a perspective camera and verified that representative positions at view depths 1, 10, 30, 55, 67, 80, 150 and 300 m lay in their designated cascade projection. This tests **coverage maths**, not an assembled scene's shadow quality or performance.
+- **Still pending:** a full release/debug build and visual run on the user's Windows workstation; verifying the moving beam from different cameras; A2 particles' appearance after skybox order adjustment; scene-specific AO artifacts; sunlight/shadow blending across split boundaries; and frame-time measurements. The Linux sandbox lacks XRandR/GLU development headers and is not a substitute for the target Windows visual test. **Do not claim a completed end-to-end runtime test or report screenshots until that check is performed.**
+
+### 6.8 Branch-level visual checklist and reproducible screenshot pairs
+
+Recommended branch name `B-extras` starting from **V4 main**. Re-run CMake to discover the three new `.cpp` files and new GLSL stages. Enable one new feature at a time; leave all five new effect flags **off** otherwise. When your teammate's code advances, merge against the current main and watch `src/application.cpp`/`src/feature_toggles.h` and the sail's one-line material initializer.
+
+```powershell
+# Replace exe path with your own Visual Studio/CMake build path.
+$exe = '.\out\build\x64-Debug\Master_TechDemo.exe'
+# Beam (night; choose an orbit angle that actually sees the lighthouse):
+& $exe --capture screenshots/extra_beam_off.png --frames 360 --camera orbit --time 22 --set minimap=0 --set spotBeam=0
+& $exe --capture screenshots/extra_beam_on.png  --frames 360 --camera orbit --time 22 --set minimap=0 --set spotBeam=1 --set spotBeamOpacity=0.9
+# Foam history, with strong waves; changes are easiest to compare in motion as well:
+& $exe --capture screenshots/extra_foam_instant.png --frames 360 --camera chase --time 15.5 --set minimap=0 --set foam=1 --set temporalFoam=0 --set waveScale=2
+& $exe --capture screenshots/extra_foam_temporal.png --frames 360 --camera chase --time 15.5 --set minimap=0 --set foam=1 --set temporalFoam=1 --set foamLifetime=2.5 --set waveScale=2
+# Thin sail, preferably viewed with the sun behind the canvas (adjust time/camera interactively):
+& $exe --capture screenshots/extra_sail_opaque.png --frames 240 --camera deck --time 17.5 --set minimap=0 --set sailTranslucency=0
+& $exe --capture screenshots/extra_sail_translucent.png --frames 240 --camera deck --time 17.5 --set minimap=0 --set sailTranslucency=1 --set sailTransmission=1.25
+# Directional cascades and SSAO:
+& $exe --capture screenshots/extra_shadow_single.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set cascadedShadows=0
+& $exe --capture screenshots/extra_shadow_cascades.png --frames 240 --camera orbit --time 15.5 --set minimap=0 --set cascadedShadows=1
+& $exe --capture screenshots/extra_ssao_off.png --frames 240 --camera deck --time 15.5 --set minimap=0 --set ssao=0
+& $exe --capture screenshots/extra_ssao_on.png --frames 240 --camera deck --time 15.5 --set minimap=0 --set ssao=1 --set ssaoStrength=1.3 --set ssaoRadius=1.4
+& $exe --capture screenshots/extra_ssao_mask.png --frames 240 --camera deck --time 15.5 --set minimap=0 --set ssao=1 --set showSsao=1
+```
+
+These commands create deterministic *intended* comparisons, not screenshots already captured here. Inspect the pairs: sun direction must actually backlight the sail; the turning lighthouse must point into the chosen shot; the island should be visible in the wide cascade; and the SSAO crease must be inside the camera view. Videos are better than static stills for showing foam persistence and the moving beam. For the course report, also capture interactive UI screenshots showing each new checkbox/slider, compare FPS with SSAO and cascades disabled/enabled, and refer to the limitations above rather than claiming physical accuracy.
+
+### 6.9 Suggested report summary (edit after visual testing)
+
+> In addition to the four planned Track B effects, we implemented the optional lighthouse beam and temporal crest foam and three stretch shading techniques. The visible lighthouse beam uses a set of additive translucent cone surfaces aligned to the existing rotating spotlight. Foam is temporally accumulated in two world-space half-float textures, preserving compressed Gerstner crests and applying exponential decay across frames. Sailcloth receives an extra back-facing diffuse transmission term for the sun and lighthouse, without making the sail transparent. Our directional shadowing uses two camera-frustum-fitted maps with a soft depth split in perspective views (and a spatial fallback for the orthographic camera), balancing nearby shadow resolution and wide course coverage. Finally, a separate depth/normal prepass computes 16-sample half-resolution screen-space ambient occlusion, which modulates PBR ambient illumination only. All five techniques can be independently enabled/disabled, with their costs and approximations documented. The effects were validated in isolated OpenGL tests, with the integrated application's screenshots and frame-time measurements to be supplied after final testing.
+
+**References to cite in the report:** `docs/TODO.md` B2/B4/B-stretch (the project specification of all five extras); the project `final_project.html`; existing B2/B4 implementation notes; for technique background, GPU Gems 3 chapter 10 on real-time atmospheric scattering / light shafts, Jerry Tessendorf (2001) on wave compression, Karis (2013–14) on real-time physically based shading, **Valient (2007), Stable Cascaded Shadow Maps**, and **John Chapman, SSAO Tutorial**. These are background techniques rather than claims that their complete algorithms were directly ported; the exact methods and simplifications used here are the code and equations above.
