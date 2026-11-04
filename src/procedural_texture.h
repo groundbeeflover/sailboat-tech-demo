@@ -34,6 +34,18 @@ ImageRGBA generateWaterNormals(int size = 256);
 // A soft, lumpy puff for spray and foam particles. The shape is in alpha; RGB is white, the shader lights it.
 ImageRGBA generateSprayPuff(int size = 64);
 
+// The designs the stern flags can show (see generateFlagAtlas).
+enum class FlagDesign {
+    Hungary, // three horizontal stripes: red, white, green
+    SouthAfrica, // red and blue fields split by a green Y with white borders; a black triangle with a gold border at the hoist
+};
+
+// Flipbook atlas for a stern flag: columns x rows frames of `design` rippling in the wind, frame f in
+// cell (f % columns, f / columns) counted from texel row 0. Around each picture runs a gutter of
+// `gutter` texels that repeats its edge, so filtering and mipmaps don't bleed in the neighbouring frames.
+ImageRGBA generateFlagAtlas(FlagDesign design, int columns, int rows, int cellWidth, int cellHeight, int gutter);
+
+
 
 // A terrain height field sampled on a square grid: the input of generateTerrain().
 struct TerrainSamples {

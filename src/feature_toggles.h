@@ -64,6 +64,11 @@ struct FeatureToggles {
     float particleRate { 800.0f }; // spray particles per second at the default speed, before the wave-impact boost
     bool sailShapeOverride { false }; // set the sail's fullness by hand instead of from the wind
     float sailShapeWeight { 1.0f }; // fullness when set by hand: 0 = flat, 1 = full (the side still follows the boom)
+    bool flag { true }; // flag at the stern with an animated (flipbook) texture
+    float flagFps { 12.0f }; // flipbook frames per second in a full wind (a quarter of it in a calm)
+    bool flagFreeze { false }; // hold one frame (report screenshots)
+    int flagFrame { 0 }; // the frame held while frozen, 0..15
+
 
     // ---- Track B features (bloom, spotlight, minimap, foam) ----
     bool bloom { true };

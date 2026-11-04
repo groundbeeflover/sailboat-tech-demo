@@ -8,6 +8,7 @@
 #include "water.h"
 #include "waves.h"
 #include "particles.h"
+#include "flag.h"
 // Always include window first (because it includes glfw, which includes GL which needs to be included AFTER glew).
 // Can't wait for modules to fix this stuff...
 #include <framework/disable_all_warnings.h>
@@ -63,7 +64,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadows", &t.shadows }, { "showShadowMap", &t.showShadowMap }, { "dayNightCycle", &t.dayNightCycle },
 
         // Track A toggles:
-        { "island", &t.island }, { "particles", &t.particles }, { "sailShapeOverride", &t.sailShapeOverride },
+        { "island", &t.island }, { "particles", &t.particles }, { "sailShapeOverride", &t.sailShapeOverride }, 
+        { "flag", &t.flag }, { "flagFreeze", &t.flagFreeze },
 
         // Track B toggles:
         { "bloom", &t.bloom }, { "showBloomBuffer", &t.showBloomBuffer },
@@ -78,7 +80,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "shadowExtent", &t.shadowExtent }, { "timeOfDay", &t.timeOfDay }, { "exposure", &t.exposure },
 
         // Track A parameters:
-        { "lighthouseSpeed", &t.lighthouseSpeed }, { "particleRate", &t.particleRate }, { "sailShapeWeight", &t.sailShapeWeight },
+        { "lighthouseSpeed", &t.lighthouseSpeed }, { "particleRate", &t.particleRate }, { "sailShapeWeight", &t.sailShapeWeight }, 
+        { "flagFps", &t.flagFps },
 
 
         // Track B parameters:
@@ -90,6 +93,8 @@ static bool applySetting(FeatureToggles& t, const std::string& assignment)
         { "waveCount", &t.waveCount }, { "pcfRadius", &t.pcfRadius }, { "shadowResolution", &t.shadowResolution },
 
         // Track A parameters:
+        { "flagFrame", &t.flagFrame },
+
 
         // Track B parameters:
         { "bloomIterations", &t.bloomIterations }, { "minimapSize", &t.minimapSize },
@@ -199,6 +204,7 @@ public:
 
             // ---- Track A: add your scene content here
             m_island.root().collect(lists.opaque);
+            m_flag.root().collect(lists.opaque);
             if (m_toggles.particles)
                 lists.transparent.push_back([this](const FrameContext& f) { m_particles.draw(f); });
 
@@ -245,6 +251,9 @@ private:
         // After m_boat.update(), so the Bow and Stern nodes already hold this frame's world matrices.
         const SprayEmitters emitters { .bow = m_boat.bowWorld(), .stern = m_boat.sternWorld(), .boatSpeed = m_boat.telemetry().speed };
         m_particles.update(dt, m_time, m_toggles, emitters, m_waves);
+        // Hangs off the Stern node, so it also runs after m_boat.update().
+        m_flag.update(dt, m_toggles, m_boat.sternWorld());
+
 
 
         // ---- Track B per-frame updates here (if any) ----
@@ -270,6 +279,7 @@ private:
         islandUi();
         particlesUi();
         sailUi();
+        flagUi();
 
         // ---- Track B feature panels (one call per feature) ----
         bloomUi();
@@ -413,6 +423,18 @@ private:
         }
     }
 
+    void flagUi()
+    {
+        FeatureToggles& t = m_toggles;
+        if (ImGui::CollapsingHeader("Flag (animated texture)")) {
+            ImGui::Checkbox("Flag", &t.flag);
+            ImGui::SliderFloat("Flipbook fps (full wind)", &t.flagFps, 1.0f, 30.0f, "%.0f");
+            ImGui::Checkbox("Freeze flipbook", &t.flagFreeze);
+            ImGui::SliderInt("Frame when frozen", &t.flagFrame, 0, Flag::FrameCount - 1);
+            ImGui::Text("showing frame %d of %d", m_flag.frame(), Flag::FrameCount);
+        }
+    }
+
 
 
     // ---- Track B feature panel methods ----
@@ -537,6 +559,7 @@ private:
     // ---- Track A members (Island, ParticleSystem, ...) ----
     Island m_island { m_course.center() }; // declared after m_course, so the centre is already known
     ParticleSystem m_particles;
+    Flag m_flag;
 
 
     // ---- Track B members (if any) ----
